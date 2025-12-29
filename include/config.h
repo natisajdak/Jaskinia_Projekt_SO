@@ -1,0 +1,105 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
+#include <sys/msg.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <time.h>
+#include <string.h>
+#include <errno.h>
+
+/// Limity tras
+#define N1 10               
+#define N2 10               
+
+// Kładki
+#define K 3                 
+
+// Czasy wycieczek (sekundy)
+#define T1 20               
+#define T2 25               
+
+// Godziny otwarcia
+#define TP 0                
+#define TK 120              
+
+// === PARAMETRY SYMULACJI ===
+#define LICZBA_ZWIEDZAJACYCH 50
+#define MAX_ZWIEDZAJACYCH 100
+#define CZAS_SYMULACJI TK
+#define WIEK_DOROSLY 18             // Od tego wieku można być opiekunem
+
+// Opóźnienia (sekundy)
+#define OPOZNIENIE_ZWIEDZAJACY_MIN 1
+#define OPOZNIENIE_ZWIEDZAJACY_MAX 3
+
+// Prawdopodobieństwa (%)
+#define SZANSA_POWROT 10
+#define SZANSA_OPIEKUN_Z_DZIECKIEM 30  // 30% dorosłych ma dziecko
+
+// === CENY BILETÓW ===
+#define CENA_BAZOWA 30.0f
+#define ZNIZKA_POWROT 0.5f
+#define ZNIZKA_DZIECKO_Z_OPIEKUNEM 0.2f  // 20% zniżki dla dziecka z opiekunem
+
+// === OGRANICZENIA WIEKOWE ===
+#define WIEK_MIN 1
+#define WIEK_MAX 80
+#define WIEK_GRATIS 3
+#define WIEK_TYLKO_TRASA2_DZIECKO 8
+#define WIEK_TYLKO_TRASA2_SENIOR 75
+
+// === KOMUNIKATY (typy w kolejce) ===
+#define MSG_BILET_REQUEST_ZWYKLY 100      // Normalna kolejka
+#define MSG_BILET_REQUEST_POWROT 200      // Powtórka - OMIJA KOLEJKĘ
+#define MSG_BILET_RESPONSE 1000           
+
+// Pomocnicze makra
+#define MSG_BILET_REQUEST MSG_BILET_REQUEST_ZWYKLY
+
+// === SEMAFORY (indeksy w zestawie) ===
+enum {
+    SEM_MUTEX = 0,
+    SEM_TRASA1_LIMIT,
+    SEM_TRASA2_LIMIT,
+    SEM_KLADKA1,
+    SEM_KLADKA2,
+    SEM_PRZEWODNIK1_READY,
+    SEM_PRZEWODNIK2_READY,
+    NUM_SEMS
+};
+
+// === ŚCIEŻKI DO PLIKÓW ===
+#define LOG_BILETY "logs/bilety.txt"
+#define LOG_TRASA1 "logs/trasa1.txt"
+#define LOG_TRASA2 "logs/trasa2.txt"
+#define LOG_SYMULACJA "logs/symulacja.log"
+
+// === KOLORY TERMINALA ===
+#define COLOR_RESET   "\033[0m"
+#define COLOR_RED     "\033[31m"
+#define COLOR_GREEN   "\033[32m"
+#define COLOR_YELLOW  "\033[33m"
+#define COLOR_BLUE    "\033[34m"
+#define COLOR_MAGENTA "\033[35m"
+#define COLOR_CYAN    "\033[36m"
+#define COLOR_BOLD    "\033[1m"
+
+// === DEBUGOWANIE ===
+#define DEBUG_MODE 1
+
+#if DEBUG_MODE
+    #define DEBUG_PRINT(fmt, ...) \
+        fprintf(stderr, "[DEBUG] %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#else
+    #define DEBUG_PRINT(fmt, ...)
+#endif
+
+#endif // CONFIG_H
