@@ -23,12 +23,12 @@
 #define K 3                 
 
 // Czasy wycieczek (sekundy)
-#define T1 20               
-#define T2 25               
+#define T1 10               
+#define T2 15              
 
 // Godziny otwarcia
 #define TP 0                
-#define TK 120              
+#define TK 180             
 
 // === PARAMETRY SYMULACJI ===
 #define LICZBA_ZWIEDZAJACYCH 50
@@ -57,12 +57,8 @@
 #define WIEK_TYLKO_TRASA2_SENIOR 75
 
 // === KOMUNIKATY (typy w kolejce) ===
-#define MSG_BILET_REQUEST_ZWYKLY 100      // Normalna kolejka
-#define MSG_BILET_REQUEST_POWROT 200      // Powtórka - OMIJA KOLEJKĘ
-#define MSG_BILET_RESPONSE 1000           
-
-// Pomocnicze makra
-#define MSG_BILET_REQUEST MSG_BILET_REQUEST_ZWYKLY
+#define MSG_BILET_POWROT 1     // Powtórka - OMIJA KOLEJKĘ
+#define MSG_BILET_ZWYKLY 2     // Normalna kolejka           
 
 // === SEMAFORY (indeksy w zestawie) ===
 enum {
