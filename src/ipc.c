@@ -119,10 +119,16 @@ void sem_wait_safe(int semid, int sem_num) {
     op.sem_op = -1;
     op.sem_flg = 0;
     
-    if (semop(semid, &op, 1) < 0) {
+    // Obsługa przerwania przez sygnał (EINTR) - ponawiaj operację
+    while (semop(semid, &op, 1) < 0) {
+        if (errno == EINTR) {
+            // Przerwane przez sygnał - spróbuj ponownie
+            continue; 
+        } 
+        // Inny błąd - raportuj ale nie kończ programu podczas zamykania
         perror("semop wait");
-        log_error("Błąd sem_wait na semaforze %d", sem_num);
-        exit(1);
+        log_error("Blad sem_wait na semaforze %d (errno=%d)", sem_num, errno);
+        return;  // Zamiast exit(1) - pozwól kontynuować zamykanie
     }
 }
 
@@ -132,10 +138,13 @@ void sem_signal_safe(int semid, int sem_num) {
     op.sem_op = 1;
     op.sem_flg = 0;
     
-    if (semop(semid, &op, 1) < 0) {
+    while (semop(semid, &op, 1) < 0) {
+        if (errno == EINTR) {
+            continue; 
+        }
         perror("semop signal");
-        log_error("Błąd sem_signal na semaforze %d", sem_num);
-        exit(1);
+        log_error("Blad sem_signal na semaforze %d (errno=%d)", sem_num, errno);
+        return;
     }
 }
 
