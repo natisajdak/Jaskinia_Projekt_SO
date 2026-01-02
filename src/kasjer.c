@@ -102,6 +102,31 @@ float oblicz_cene_biletu(MsgBilet *prosba) {
     return CENA_BAZOWA;
 }
 
+const char* okresl_typ_biletu(MsgBilet *prosba) {
+    if (prosba->czy_powrot) {
+        return "POWTÓRKA";
+    }
+    
+    if (prosba->wiek < WIEK_GRATIS) {  // <3 lat
+        return "DZIECKO_GRATIS";
+    }
+    
+    if (prosba->wiek < WIEK_TYLKO_TRASA2_DZIECKO) {  // <8 lat
+        if (prosba->pid_opiekuna > 0) {
+            return "DZIECKO_Z_OPIEKUNEM";
+        }
+    }
+    
+    if (prosba->wiek > WIEK_TYLKO_TRASA2_SENIOR) {  // >75 lat
+        return "SENIOR";
+    }
+    
+    if (prosba->jest_opiekunem) {
+        return "OPIEKUN";
+    }
+    
+    return "NORMALNY";
+}
 
 void* obsluga_klienta(void* arg) {
     WatekArgs *args = (WatekArgs*)arg;
@@ -179,8 +204,7 @@ void* obsluga_klienta(void* arg) {
             }
             sem_signal_safe(args->semid, SEM_MUTEX);
             
-            const char *typ_biletu = prosba.czy_powrot ? "POWTÓRKA" : 
-                                     (prosba.jest_opiekunem ? "OPIEKUN" : "NORMALNY");
+            const char *typ_biletu = okresl_typ_biletu(&prosba);
             
             log_success("[KASJER-WĄTEK %d] Bilet #%d dla PID %d (%.2f zł, trasa %d, typ: %s)",
                         args->watek_id, numer_biletu, prosba.zwiedzajacy_pid,
