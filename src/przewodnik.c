@@ -20,127 +20,176 @@ StanJaskini *stan_global = NULL;
 // Flaga zamknięcia (sygnał)
 volatile sig_atomic_t flaga_zamkniecie = 0;
 
+volatile sig_atomic_t w_trakcie_wycieczki = 0;
+
 // Obsługa sygnału zamknięcia
 void obsluga_zamkniecia(int sig) {
     if (sig == SIGUSR1 || sig == SIGUSR2) {
         flaga_zamkniecie = 1;
-        log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia!", numer_trasy);
+        if (w_trakcie_wycieczki) {
+            log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia PODCZAS wycieczki - dokończymy normalnie!", numer_trasy);
+        } else {
+            log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia PRZED wyjściem - wycieczka ANULOWANA!", numer_trasy);
+        }
     }
 }
 
 // WEJŚCIE PRZEZ KŁADKĘ 
-void wpusc_przez_kladke(int liczba_osob) {
+void wpusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
+    (void)grupa_pids;
+    
     int sem_kladka = (numer_trasy == 1) ? SEM_KLADKA1 : SEM_KLADKA2;
-    int pozostalo = liczba_osob;
-    int numer_osoby_w_grupie = 0;
-
-    log_info("[PRZEWODNIK %d] Wpuszczam %d osób przez kładkę (max %d jednocześnie)...", 
+    int sem_wejscie = (numer_trasy == 1) ? SEM_GRUPA1_WEJSCIE_KLADKA : SEM_GRUPA2_WEJSCIE_KLADKA;
+    
+    log_info("[PRZEWODNIK %d] Wpuszczam %d osób przez kładkę (max %d jednocześnie)...",
              numer_trasy, liczba_osob, K);
 
-    while (pozostalo > 0) {
-        // Oblicz wielkość tury (nie więcej niż K i nie więcej niż zostało osób)
-        int tura = (pozostalo > K) ? K : pozostalo;
-
-        // 1. WEJŚCIE TURY: Rezerwujemy miejsca i wchodzimy
-        for (int j = 0; j < tura; j++) {
-            sem_wait_safe(semid_global, sem_kladka); // Czekaj na wolne miejsce na kładce
-            
-            sem_wait_safe(semid_global, SEM_MUTEX);
-            numer_osoby_w_grupie++;
-            if (numer_trasy == 1) stan_global->kladka1_licznik++;
-            else stan_global->kladka2_licznik++;
-            
-            int aktualnie_na_kladce = (numer_trasy == 1) ? stan_global->kladka1_licznik : stan_global->kladka2_licznik;
-            log_info("[PRZEWODNIK %d] Osoba %d/%d wchodzi na kładkę (na kładce: %d/%d)", 
-                     numer_trasy, numer_osoby_w_grupie, liczba_osob, aktualnie_na_kladce, K);
-            sem_signal_safe(semid_global, SEM_MUTEX);
-        }
-
-        // 2. PRZEJŚCIE: Cała tura idzie przez kładkę w tym samym czasie
-        log_info("[PRZEWODNIK %d] Tura %d osób przechodzi przez kładkę...", numer_trasy, tura);
-        usleep(losuj(1000000, 1500000)); // Symulacja czasu przejścia tury
-
-        // 3. ZEJŚCIE TURY: Osoby schodzą z kładki na trasę
-        for (int j = 0; j < tura; j++) {
-            sem_wait_safe(semid_global, SEM_MUTEX);
-            if (numer_trasy == 1) {
-                stan_global->kladka1_licznik--;
-                stan_global->trasa1_licznik++; 
-            } else {
-                stan_global->kladka2_licznik--;
-                stan_global->trasa2_licznik++;
-            }
-            sem_signal_safe(semid_global, SEM_MUTEX);
-            
-            sem_signal_safe(semid_global, sem_kladka); // Zwolnij miejsce dla następnych
-        }
-
-        pozostalo -= tura;
-        if (pozostalo > 0) log_info("[PRZEWODNIK %d] Kolejna tura...", numer_trasy);
+    // SPRAWDŹ I USTAW KIERUNEK KŁADKI
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    int *kierunek = (numer_trasy == 1) ? &stan_global->kladka1_kierunek : &stan_global->kladka2_kierunek;
+    int *licznik = (numer_trasy == 1) ? &stan_global->kladka1_licznik : &stan_global->kladka2_licznik;
+    
+    // Czekaj aż kładka będzie PUSTA (licznik=0) zanim zmienisz kierunek
+    while (*licznik > 0) {
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        usleep(100000);  // 100ms
+        sem_wait_safe(semid_global, SEM_MUTEX);
     }
+    
+    // Kładka pusta - ustaw kierunek WEJŚCIE
+    *kierunek = 0;
+    log_info("[PRZEWODNIK %d] Kładka pusta - ustawiam kierunek: WEJŚCIE", numer_trasy);
+    sem_signal_safe(semid_global, SEM_MUTEX);
+
+    int idx_zwiedzajacy = 0;
+    
+    for (int tura = 0; tura < (liczba_osob + K - 1) / K; tura++) {
+        int w_tej_turze = ((tura + 1) * K <= liczba_osob) ? K : (liczba_osob - tura * K);
+        
+        log_info("[PRZEWODNIK %d] Tura %d: wpuszczam %d osób...", 
+                 numer_trasy, tura + 1, w_tej_turze);
+        
+        // ATOMOWA OPERACJA: Rezerwuj wszystkie miejsca naraz
+        for (int j = 0; j < w_tej_turze; j++) {
+            sem_wait_safe(semid_global, sem_kladka);
+        }
+        
+        // Aktualizuj licznik kładki PRZED sygnalizowaniem
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        *licznik += w_tej_turze;
+        log_info("[PRZEWODNIK %d] Na kładce: %d/%d osób", numer_trasy, *licznik, K);
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
+        // Teraz sygnalizuj zwiedzającym
+        for (int j = 0; j < w_tej_turze; j++) {
+            sem_signal_safe(semid_global, sem_wejscie);
+            idx_zwiedzajacy++;
+        }
+        
+        // Czekaj na potwierdzenia
+        for (int j = 0; j < w_tej_turze; j++) {
+            sem_wait_safe(semid_global, SEM_POTWIERDZENIE);
+        }
+        
+        // Tura przechodzi
+        usleep(losuj(1000000, 1500000));
+        
+        // ATOMOWA OPERACJA: Wszyscy schodzą z kładki
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        *licznik -= w_tej_turze;
+        if (numer_trasy == 1) {
+            stan_global->trasa1_licznik += w_tej_turze;
+        } else {
+            stan_global->trasa2_licznik += w_tej_turze;
+        }
+        log_info("[PRZEWODNIK %d] Tura %d weszła na trasę (na trasie: %d)", 
+                 numer_trasy, tura + 1,
+                 (numer_trasy == 1) ? stan_global->trasa1_licznik : stan_global->trasa2_licznik);
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
+        // Zwolnij miejsca na kładce
+        for (int j = 0; j < w_tej_turze; j++) {
+            sem_signal_safe(semid_global, sem_kladka);
+        }
+    }
+    
     log_success("[PRZEWODNIK %d] Wszyscy weszli na trasę", numer_trasy);
 }
 // WYJŚCIE PRZEZ KŁADKĘ 
-void wypusc_przez_kladke(int liczba_osob) {
+void wypusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
+    (void)grupa_pids;
+    
     int sem_kladka = (numer_trasy == 1) ? SEM_KLADKA1 : SEM_KLADKA2;
-    int pozostalo = liczba_osob;
-    int numer_osoby_w_grupie = 0;
+    int sem_wyjscie = (numer_trasy == 1) ? SEM_GRUPA1_WYJSCIE_KLADKA : SEM_GRUPA2_WYJSCIE_KLADKA;
+    
+    log_info("[PRZEWODNIK %d] Wypuszczam %d osób z jaskini...", numer_trasy, liczba_osob);
 
-    log_info("[PRZEWODNIK %d] Wypuszczam %d osób z jaskini (max %d na kładce)...", 
-             numer_trasy, liczba_osob, K);
+    // SPRAWDŹ I USTAW KIERUNEK KŁADKI
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    int *kierunek = (numer_trasy == 1) ? &stan_global->kladka1_kierunek : &stan_global->kladka2_kierunek;
+    int *licznik = (numer_trasy == 1) ? &stan_global->kladka1_licznik : &stan_global->kladka2_licznik;
+    
+    // Czekaj aż kładka będzie PUSTA
+    while (*licznik > 0) {
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        usleep(100000);
+        sem_wait_safe(semid_global, SEM_MUTEX);
+    }
+    
+    // Kładka pusta - ustaw kierunek WYJŚCIE
+    *kierunek = 1;
+    log_info("[PRZEWODNIK %d] Kładka pusta - ustawiam kierunek: WYJŚCIE", numer_trasy);
+    sem_signal_safe(semid_global, SEM_MUTEX);
 
-    while (pozostalo > 0) {
-        int tura = (pozostalo > K) ? K : pozostalo;
-
-        // 1. WEJŚCIE NA KŁADKĘ (od strony jaskini)
-        for (int j = 0; j < tura; j++) {
+    int idx_zwiedzajacy = 0;
+    
+    for (int tura = 0; tura < (liczba_osob + K - 1) / K; tura++) {
+        int w_tej_turze = ((tura + 1) * K <= liczba_osob) ? K : (liczba_osob - tura * K);
+        
+        // ATOMOWA: Rezerwuj miejsca
+        for (int j = 0; j < w_tej_turze; j++) {
             sem_wait_safe(semid_global, sem_kladka);
-            
-            sem_wait_safe(semid_global, SEM_MUTEX);
-            numer_osoby_w_grupie++;
-            if (numer_trasy == 1) {
-                stan_global->kladka1_licznik++;
-                stan_global->trasa1_licznik--;
-            } else {
-                stan_global->kladka2_licznik++;
-                stan_global->trasa2_licznik--;
-            }
-            int aktualnie = (numer_trasy == 1) ? stan_global->kladka1_licznik : stan_global->kladka2_licznik;
-            log_info("[PRZEWODNIK %d] Osoba %d/%d opuszcza trasę (na kładce: %d/%d)", 
-                     numer_trasy, numer_osoby_w_grupie, liczba_osob, aktualnie, K);
-            sem_signal_safe(semid_global, SEM_MUTEX);
         }
-
-        // 2. PRZEJŚCIE TURY
+        
+        // ATOMOWA: Przenieś z trasy na kładkę
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        if (numer_trasy == 1) {
+            stan_global->trasa1_licznik -= w_tej_turze;
+        } else {
+            stan_global->trasa2_licznik -= w_tej_turze;
+        }
+        *licznik += w_tej_turze;
+        log_info("[PRZEWODNIK %d] Tura %d wchodzi na kładkę wyjściową (%d osób)", 
+                 numer_trasy, tura + 1, w_tej_turze);
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
+        // Sygnalizuj zwiedzającym
+        for (int j = 0; j < w_tej_turze; j++) {
+            sem_signal_safe(semid_global, sem_wyjscie);
+            idx_zwiedzajacy++;
+        }
+        
+        // Czekaj na potwierdzenia
+        for (int j = 0; j < w_tej_turze; j++) {
+            sem_wait_safe(semid_global, SEM_POTWIERDZENIE);
+        }
+        
+        // Przejście
         usleep(losuj(1000000, 1500000));
-
-        // 3. ZEJŚCIE Z KŁADKI (na zewnątrz)
-        for (int j = 0; j < tura; j++) {
-            sem_wait_safe(semid_global, SEM_MUTEX);
-            if (numer_trasy == 1) stan_global->kladka1_licznik--;
-            else stan_global->kladka2_licznik--;
-            sem_signal_safe(semid_global, SEM_MUTEX);
-            
+        
+        // ATOMOWA: Opuścili kładkę
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        *licznik -= w_tej_turze;
+        log_info("[PRZEWODNIK %d] Tura %d opuściła jaskinię", numer_trasy, tura + 1);
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
+        // Zwolnij kładkę
+        for (int j = 0; j < w_tej_turze; j++) {
             sem_signal_safe(semid_global, sem_kladka);
         }
-
-        pozostalo -= tura;
     }
+    
     log_success("[PRZEWODNIK %d] Wszyscy wyszli na zewnątrz", numer_trasy);
-}
-
-// ZARZĄDZANIE MIEJSCEM NA TRASIE (Limity Ni)
-void zajmij_miejsce_na_trasie(int liczba_osob) {
-    int sem_limit = (numer_trasy == 1) ? SEM_TRASA1_LIMIT : SEM_TRASA2_LIMIT;
-    int max_limit = (numer_trasy == 1) ? N1 : N2;
-    
-    log_info("[PRZEWODNIK %d] Rezerwuję %d miejsc na trasie...", numer_trasy, liczba_osob);
-    
-    for (int i = 0; i < liczba_osob; i++) {
-        sem_wait_safe(semid_global, sem_limit); 
-    }
-    
-    log_success("[PRZEWODNIK %d] Miejsca zarezerwowane (%d/%d)", numer_trasy, liczba_osob, max_limit);
 }
 
 void zwolnij_miejsce_na_trasie(int liczba_osob) {
