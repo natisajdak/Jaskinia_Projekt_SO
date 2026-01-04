@@ -12,230 +12,181 @@
 #include "../include/ipc.h"
 #include "../include/utils.h"
 
-int main(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-    
-    log_info("[STRAŻNIK] Start (PID: %d)", getpid());
-    
-    // Pobierz IPC
-    int shmid = atoi(getenv("SHMID"));
-    int semid = atoi(getenv("SEMID"));
-    int msgid = atoi(getenv("MSGID"));
-    (void)msgid;  // Nie używamy kolejki w strażniku
-    
-    StanJaskini *stan = podlacz_pamiec_dzielona(shmid);
-    stan->pid_straznik = getpid();
-    
-    log_success("[STRAŻNIK] Połączono z IPC");
-    
-    // Pobierz PID przewodników
-    pid_t pid_przewodnik1 = 0;
-    pid_t pid_przewodnik2 = 0;
-    
-    // Czekaj aż przewodnicy się zarejestrują
-    log_info("[STRAŻNIK] Czekam na rejestrację przewodników...");
-    while (pid_przewodnik1 == 0 || pid_przewodnik2 == 0) {
-        sem_wait_safe(semid, SEM_MUTEX);
-        pid_przewodnik1 = stan->pid_przewodnik1;
-        pid_przewodnik2 = stan->pid_przewodnik2;
-        sem_signal_safe(semid, SEM_MUTEX);
-        
-        if (pid_przewodnik1 == 0 || pid_przewodnik2 == 0) {
-            usleep(100000);  // 100ms
-        }
-    }
-    
-    log_success("[STRAŻNIK] Przewodnicy zarejestrowani (PID1: %d, PID2: %d)", 
-                pid_przewodnik1, pid_przewodnik2);
-    
-    // Oblicz czas zamknięcia (Tk - 30 sekund)
-    int czas_do_zamkniecia = TK - 30;
-    if (czas_do_zamkniecia < 10) {
-        czas_do_zamkniecia = 10;  // Minimum 10 sekund
-    }
-    
-    log_info("[STRAŻNIK] Wyślę sygnały zamknięcia za %d sekund (przed Tk=%d)", 
-             czas_do_zamkniecia, TK);
-    
-    // Czekaj do czasu zamknięcia
-    time_t start = stan->czas_startu;
-    while (czas_od_startu(start) < czas_do_zamkniecia) {
-        sleep(1);
-        
-        // Wyświetl status co 10 sekund
-        if (czas_od_startu(start) % 10 == 0) {
-            log_info("[STRAŻNIK] Status: bilety=%d, trasa1=%d osób, trasa2=%d osób",
-                     stan->bilety_sprzedane, stan->trasa1_licznik, stan->trasa2_licznik);
-        }
-    }
-    
-    // === WYSYŁANIE SYGNAŁÓW ZAMKNIĘCIA ===
-    
+// Zmienne globalne dla łatwiejszego dostępu w funkcjach
+int shmid, semid;
+StanJaskini *stan = NULL;
+
+void wyslij_sygnaly_zamkniecia() {
     log_warning("[STRAŻNIK] ZAMYKAM JASKINIĘ - wysyłam sygnały!");
-    
-    // Oznacz jaskinię jako zamkniętą
+
     sem_wait_safe(semid, SEM_MUTEX);
     stan->jaskinia_otwarta = 0;
     stan->zamkniecie_przewodnik1 = 1;
     stan->zamkniecie_przewodnik2 = 1;
+    pid_t p1 = stan->pid_przewodnik1;
+    pid_t p2 = stan->pid_przewodnik2;
+    pid_t pk = stan->pid_kasjer;
     sem_signal_safe(semid, SEM_MUTEX);
-    
-    // Wyślij SIGUSR1 do przewodnika 1
-    if (kill(pid_przewodnik1, SIGUSR1) == 0) {
-        log_success("[STRAŻNIK] Wysłano SIGUSR1 do przewodnika 1 (PID %d)", pid_przewodnik1);
-    } else {
-        perror("kill przewodnik1");
-        log_error("[STRAŻNIK] Błąd wysyłania sygnału do przewodnika 1");
+
+    sem_signal_safe(semid, SEM_KOLEJKA1_NIEPUSTA);
+    sem_signal_safe(semid, SEM_KOLEJKA2_NIEPUSTA);
+
+    // Sygnał dla Przewodnika 1
+    if (p1 > 0) {
+        if (kill(p1, SIGUSR1) == 0) {
+            log_success("[STRAŻNIK] Wysłano SIGUSR1 do przewodnika 1 (PID %d)", p1);
+        } else {
+            log_error("[STRAŻNIK] Błąd sygnału do przewodnika 1: %s", strerror(errno));
+        }
     }
-    
-    sleep(1);  // Krótka przerwa
-    
-    // Wyślij SIGUSR2 do przewodnika 2
-    if (kill(pid_przewodnik2, SIGUSR2) == 0) {
-        log_success("[STRAŻNIK] Wysłano SIGUSR2 do przewodnika 2 (PID %d)", pid_przewodnik2);
-    } else {
-        perror("kill przewodnik2");
-        log_error("[STRAŻNIK] Błąd wysyłania sygnału do przewodnika 2");
+
+    usleep(200000); // 200ms przerwy
+
+    // Sygnał dla Przewodnika 2
+    if (p2 > 0) {
+        if (kill(p2, SIGUSR2) == 0) {
+            log_success("[STRAŻNIK] Wysłano SIGUSR2 do przewodnika 2 (PID %d)", p2);
+        } else {
+            log_error("[STRAŻNIK] Błąd sygnału do przewodnika 2: %s", strerror(errno));
+        }
     }
-    
+
+    // Sygnał dla Kasjera
+    if (pk > 0) {
+        if (kill(pk, SIGTERM) == 0) {
+            log_success("[STRAŻNIK] Wysłano SIGTERM do kasjera (PID %d)", pk);
+        }
+    }
+
     log_info("[STRAŻNIK] Sygnały zamknięcia wysłane");
-    
-    // Czekaj na zakończenie wycieczek w trakcie
+}
+
+void czekaj_na_zakonczenie_wycieczek() {
     log_info("[STRAŻNIK] Czekam na zakończenie wycieczek w trakcie...");
     
-    int max_oczekiwanie = (T1 > T2 ? T1 : T2) + 30;  // Max czas + bufor
-    int oczekiwanie = 0;
+    int max_timeout = (T1 > T2 ? T1 : T2) + 20;
+    int timeout = 0;
     
-    while (oczekiwanie < max_oczekiwanie) {
+    while (timeout < max_timeout) {
         sem_wait_safe(semid, SEM_MUTEX);
-        int grupa1 = stan->grupa1_aktywna;
-        int grupa2 = stan->grupa2_aktywna;
         int trasa1_osoby = stan->trasa1_licznik;
         int trasa2_osoby = stan->trasa2_licznik;
+        int g1_aktywna = stan->grupa1_aktywna;
+        int g2_aktywna = stan->grupa2_aktywna;
         sem_signal_safe(semid, SEM_MUTEX);
         
-        if (!grupa1 && !grupa2 && trasa1_osoby == 0 && trasa2_osoby == 0) {
+        if (trasa1_osoby == 0 && trasa2_osoby == 0 && !g1_aktywna && !g2_aktywna) {
             log_success("[STRAŻNIK] Wszystkie wycieczki zakończone, jaskinia pusta!");
             break;
         }
         
-        if (oczekiwanie % 5 == 0) {
-            log_info("[STRAŻNIK] Oczekiwanie %d/%d sek (trasa1: %d osób %s, trasa2: %d osób %s)",
-                     oczekiwanie, max_oczekiwanie,
-                     trasa1_osoby, grupa1 ? "[AKTYWNA]" : "",
-                     trasa2_osoby, grupa2 ? "[AKTYWNA]" : "");
+        if (timeout % 5 == 0) {
+            log_info("[STRAŻNIK] Oczekiwanie %d/%d sek (trasa1: %d osób%s, trasa2: %d osób%s)",
+                     timeout, max_timeout,
+                     trasa1_osoby, g1_aktywna ? " [AKTYWNA]" : "",
+                     trasa2_osoby, g2_aktywna ? " [AKTYWNA]" : "");
         }
         
         sleep(1);
-        oczekiwanie++;
+        timeout++;
     }
     
-    if (oczekiwanie >= max_oczekiwanie) {
-        log_warning("[STRAŻNIK] Timeout - niektóre wycieczki mogły nie zakończyć się");
+    if (timeout >= max_timeout) {
+        log_warning("[STRAŻNIK] Timeout - grupy nie opuściły jaskini w wyznaczonym czasie!");
     }
     
-    // === EWAKUACJA POZOSTAŁYCH ZWIEDZAJĄCYCH ===
-    
-    sem_wait_safe(semid, SEM_MUTEX);
-    int liczba_aktywnych = stan->liczba_aktywnych;
+    log_warning("[STRAŻNIK] Ewakuacja wszystkich zwiedzających...");
+    sem_wait_safe(semid, SEM_MUTEX); 
+    int ewakuowani = 0;
+    for (int i = 0; i < 100; i++) {
+        if (stan->zwiedzajacy_pids[i] > 0) {
+            kill(stan->zwiedzajacy_pids[i], SIGTERM);
+            ewakuowani++;
+        }
+    }
     sem_signal_safe(semid, SEM_MUTEX);
+
+    if (ewakuowani > 0) {
+        log_warning("[STRAŻNIK] Ewakuowano %d zwiedzających", ewakuowani);
+        sleep(2);  // Daj czas na reakcję
+    }
+}
+
+int main() {
+    log_info("[STRAŻNIK] Start (PID: %d)", getpid());
     
-    if (liczba_aktywnych > 0) {
-        log_warning("[STRAŻNIK] Wykryto %d aktywnych zwiedzających - EWAKUACJA!",
-                    liczba_aktywnych);
-        
-        printf("\n");
-        printf(COLOR_RED COLOR_BOLD "╔═══════════════════════════════════════════╗\n");
-        printf("║           PROCEDURA EWAKUACJI             ║\n");
-        printf("╚═══════════════════════════════════════════╝\n" COLOR_RESET);
-        
-        int ewakuowanych = 0;
-        
-        for (int i = 0; i < liczba_aktywnych && i < MAX_ZWIEDZAJACYCH; i++) {
-            sem_wait_safe(semid, SEM_MUTEX);
-            pid_t pid = stan->zwiedzajacy_pids[i];
-            sem_signal_safe(semid, SEM_MUTEX);
-            
-            if (pid > 0) {
-                log_info("[STRAŻNIK] → Ewakuuję zwiedzającego PID %d (SIGTERM)", pid);
-                
-                if (kill(pid, SIGTERM) == 0) {
-                    ewakuowanych++;
-                } else {
-                    // Proces może już się zakończyć
-                    if (errno != ESRCH) {
-                        perror("kill SIGTERM");
-                    }
-                }
-                
-                usleep(100000);  // 100ms przerwy między sygnałami
-            }
-        }
-        
-        log_success("[STRAŻNIK] Ewakuowano %d zwiedzających", ewakuowanych);
-        
-        // Daj czas na wyjście (max 5 sekund)
-        log_info("[STRAŻNIK] Oczekiwanie na opuszczenie jaskini...");
-        
-        for (int t = 0; t < 50; t++) {  // 50 x 100ms = 5 sekund
-            sem_wait_safe(semid, SEM_MUTEX);
-            int pozostalo = stan->liczba_aktywnych;
-            sem_signal_safe(semid, SEM_MUTEX);
-            
-            if (pozostalo == 0) {
-                log_success("[STRAŻNIK] Wszyscy zwiedzający opuścili jaskinię!");
-                break;
-            }
-            
-            usleep(100000);  // 100ms
-        }
-        
-        // Sprawdź końcowy stan
-        sem_wait_safe(semid, SEM_MUTEX);
-        int pozostalo = stan->liczba_aktywnych;
-        sem_signal_safe(semid, SEM_MUTEX);
-        
-        if (pozostalo > 0) {
-            log_warning("[STRAŻNIK] Pozostało %d zwiedzających (timeout ewakuacji)", pozostalo);
-        }
-        
-        printf("\n");
-    } else {
-        log_success("[STRAŻNIK] Jaskinia była pusta - brak ewakuacji");
+    char *shmid_env = getenv("SHMID");
+    char *semid_env = getenv("SEMID");
+    if (!shmid_env || !semid_env) {
+        log_error("[STRAŻNIK] Brak zmiennych środowiskowych IPC!");
+        return 1;
     }
 
-    // === PODSUMOWANIE ===
+    shmid = atoi(shmid_env);
+    semid = atoi(semid_env);
+    stan = podlacz_pamiec_dzielona(shmid);
     
+    log_success("[STRAŻNIK] Połączono z IPC");
+    stan->pid_straznik = getpid();
+    
+    // Czekaj na rejestrację przewodników
+    log_info("[STRAŻNIK] Czekam na rejestrację przewodników...");
+    while (1) {
+        sem_wait_safe(semid, SEM_MUTEX);
+        int p1 = stan->pid_przewodnik1;
+        int p2 = stan->pid_przewodnik2;
+        sem_signal_safe(semid, SEM_MUTEX);
+        if (p1 > 0 && p2 > 0) break;
+        usleep(200000);
+    }
+    log_success("[STRAŻNIK] Przewodnicy zarejestrowani");
+    
+    wyslij_sygnaly_zamkniecia();
+    czekaj_na_zakonczenie_wycieczek();
+    
+    // Podsumowanie
     printf("\n");
-    printf(COLOR_BOLD COLOR_YELLOW);
+    printf("\n" COLOR_BOLD COLOR_YELLOW);
     printf("╔═══════════════════════════════════════════╗\n");
-    printf("║       PODSUMOWANIE STRAŻNIKA              ║\n");
-    printf("╚═══════════════════════════════════════════╝\n");
-    printf(COLOR_RESET);
+    printf("║         PODSUMOWANIE STRAŻNIKA            ║\n");
+    printf("╚═══════════════════════════════════════════╝\n" COLOR_RESET);
     
     sem_wait_safe(semid, SEM_MUTEX);
-    printf("Bilety sprzedane:     %d\n", stan->bilety_sprzedane);
-    printf("  - Trasa 1:          %d\n", stan->bilety_trasa1);
-    printf("  - Trasa 2:          %d\n", stan->bilety_trasa2);
-    printf("Osoby na trasie 1:    %d\n", stan->trasa1_licznik);
-    printf("Osoby na trasie 2:    %d\n", stan->trasa2_licznik);
-    printf("Aktywni zwiedzający:  %d\n", stan->liczba_aktywnych);
+    printf("Bilety sprzedane:      %d\n", stan->bilety_sprzedane);
+    printf("  - Trasa 1:           %d\n", stan->bilety_trasa1);
+    printf("  - Trasa 2:           %d\n", stan->bilety_trasa2);
+    printf("Osoby na trasie 1:     %d\n", stan->trasa1_licznik);
+    printf("Osoby na trasie 2:     %d\n", stan->trasa2_licznik);
     sem_signal_safe(semid, SEM_MUTEX);
+
+    printf("\n");
+    
+    // POPRAWKA: Policz tylko tych co są FAKTYCZNIE aktywni (nie w kolejce)
+    int faktycznie_aktywni = 0;
+    for(int i=0; i<100; i++) {
+        if(stan->zwiedzajacy_pids[i] > 0) faktycznie_aktywni++;
+    }
+    
+    int w_kolejkach = stan->kolejka_trasa1_koniec + stan->kolejka_trasa2_koniec;
+    
+    printf("W kolejkach:           %d\n", w_kolejkach);
+    printf("Faktycznie aktywni:    %d\n", faktycznie_aktywni);
+    
+    if (w_kolejkach > 0) {
+        log_info("[STRAŻNIK] %d zwiedzających czekało w kolejkach - zostali ewakuowani", w_kolejkach);
+    }
+    if (faktycznie_aktywni > 0) {
+        log_info("[STRAŻNIK] %d zwiedzających pozostało aktywnych - zostali ewakuowani", faktycznie_aktywni);
+    }
     
     printf("\n");
     
-    // Log do pliku
     zapisz_log_symulacji("=== RAPORT STRAŻNIKA ===");
-    zapisz_log_symulacji("Bilety sprzedane: %d (Trasa1: %d, Trasa2: %d)",
-                         stan->bilety_sprzedane, stan->bilety_trasa1, stan->bilety_trasa2);
-    zapisz_log_symulacji("Sygnały zamknięcia wysłane o czasie: %d sekund od startu", 
-                         czas_do_zamkniecia);
-    zapisz_log_symulacji("Jaskinia bezpiecznie zamknięta");
-    
+    zapisz_log_symulacji("Bilety: %d (T1: %d, T2: %d), W kolejkach: %d, Aktywni: %d", 
+                         stan->bilety_sprzedane, stan->bilety_trasa1, stan->bilety_trasa2, 
+                         w_kolejkach, faktycznie_aktywni);
+
     log_success("[STRAŻNIK] Koniec pracy");
-    
     odlacz_pamiec_dzielona(stan);
-    
     return 0;
 }
