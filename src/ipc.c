@@ -370,7 +370,7 @@ int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob) {
 void wypisz_stan_jaskini(StanJaskini *stan) {
     printf("\n");
     printf(COLOR_BOLD "╔═══════════════════════════════════════╗\n" COLOR_RESET);
-    printf(COLOR_BOLD "║      STAN JASKINI (snapshot)          ║\n" COLOR_RESET);
+    printf(COLOR_BOLD "║      STAN JASKINI                     ║\n" COLOR_RESET);
     printf(COLOR_BOLD "╠═══════════════════════════════════════╣\n" COLOR_RESET);
     printf("║ Trasa 1: %2d/%2d osób                  ║\n", stan->trasa1_licznik, N1);
     printf("║ Trasa 2: %2d/%2d osób                  ║\n", stan->trasa2_licznik, N2);
@@ -384,9 +384,13 @@ void wypisz_stan_jaskini(StanJaskini *stan) {
     printf("║ Bilety sprzedane: %3d                 ║\n", stan->bilety_sprzedane);
     printf("║   - Trasa 1: %3d                      ║\n", stan->bilety_trasa1);
     printf("║   - Trasa 2: %3d                      ║\n", stan->bilety_trasa2);
+    printf("║ W kolejkach:                          ║\n");
+    printf("║   - Trasa 1: %3d osób                 ║\n", stan->kolejka_trasa1_koniec);
+    printf("║   - Trasa 2: %3d osób                 ║\n", stan->kolejka_trasa2_koniec);
     printf(COLOR_BOLD "╚═══════════════════════════════════════╝\n" COLOR_RESET);
     printf("\n");
 }
+
 
 void zapisz_log_symulacji(const char *format, ...) {
     char message[512];
