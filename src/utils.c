@@ -161,6 +161,6 @@ const char* pobierz_powod_odmowy(void) {
 
 // === SYGNAŁY ===
 void konfiguruj_sygnaly(void) {
-    // Implementacja w przyszłych krokach
+    signal(SIGPIPE, SIG_IGN);
 }
 
