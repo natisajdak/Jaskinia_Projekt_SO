@@ -116,6 +116,11 @@ void inicjalizuj_semafory(int semid) {
     semctl(semid, SEM_GRUPA2_WYJSCIE_KLADKA, SETVAL, arg);
     semctl(semid, SEM_POTWIERDZENIE, SETVAL, arg);
     log_info("Semafory komunikacji zwiedzający-przewodnik = 0");
+
+    arg.val = 0;
+    semctl(semid, SEM_KOLEJKA1_NIEPUSTA, SETVAL, arg);
+    semctl(semid, SEM_KOLEJKA2_NIEPUSTA, SETVAL, arg);
+    log_info("Semafory kolejek niepustych = 0");
     
     log_success("Wszystkie semafory zainicjalizowane");
 }
@@ -129,13 +134,11 @@ void sem_wait_safe(int semid, int sem_num) {
     // Obsługa przerwania przez sygnał (EINTR) - ponawiaj operację
     while (semop(semid, &op, 1) < 0) {
         if (errno == EINTR) {
-            // Przerwane przez sygnał - spróbuj ponownie
             continue; 
         } 
-        // Inny błąd - raportuj ale nie kończ programu podczas zamykania
         perror("semop wait");
         log_error("Blad sem_wait na semaforze %d (errno=%d)", sem_num, errno);
-        return;  // Zamiast exit(1) - pozwól kontynuować zamykanie
+        return;  
     }
 }
 
@@ -238,6 +241,87 @@ void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
     }
     
     sem_signal_safe(semid, SEM_MUTEX);
+}
+
+//  KOLEJKOWANIE ZWIEDZAJĄCYCH 
+void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid) {
+    sem_wait_safe(semid, SEM_MUTEX);
+    
+    if (trasa == 1) {
+        if (stan->kolejka_trasa1_koniec < MAX_ZWIEDZAJACYCH) {
+            int idx = stan->kolejka_trasa1_koniec++;
+            stan->kolejka_trasa1[idx] = pid;
+
+            log_info("[KOLEJKA T1] Zwiedzający PID %d dołączył (pozycja %d)", pid, idx + 1);
+        }
+    } else {
+        if (stan->kolejka_trasa2_koniec < MAX_ZWIEDZAJACYCH) {
+            int idx = stan->kolejka_trasa2_koniec++;
+            stan->kolejka_trasa2[idx] = pid;
+            stan->para_flaga[idx] = 0;
+            log_info("[KOLEJKA T2] Zwiedzający PID %d dołączył (pozycja %d)", pid, idx + 1);
+        }
+    }
+    
+    sem_signal_safe(semid, SEM_MUTEX);
+}
+
+int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob) {
+    sem_wait_safe(semid, SEM_MUTEX);
+    
+    pid_t *kolejka = (nr_trasy == 1) ? stan->kolejka_trasa1 : stan->kolejka_trasa2;
+    int *koniec = (nr_trasy == 1) ? &stan->kolejka_trasa1_koniec : &stan->kolejka_trasa2_koniec;
+    pid_t *grupa_pids = (nr_trasy == 1) ? stan->grupa1_pids : stan->grupa2_pids;
+    int *grupa_liczba = (nr_trasy == 1) ? &stan->grupa1_liczba : &stan->grupa2_liczba;
+    
+    if (*koniec == 0) {
+        sem_signal_safe(semid, SEM_MUTEX);
+        return 0;
+    }
+    
+    int zebrano = 0;
+    int idx = 0;
+    
+    while (idx < *koniec && zebrano < max_osob) {
+        // Sprawdzaj flagę TYLKO dla trasy 2!
+        if (nr_trasy == 2 && stan->para_flaga[idx] == 1) {
+            // Para - weź oboje albo żadnego
+            if (zebrano + 2 <= max_osob) {
+                grupa_pids[zebrano++] = kolejka[idx++];  // Dziecko
+                grupa_pids[zebrano++] = kolejka[idx++];  // Opiekun
+                DEBUG_PRINT("[PRZEWODNIK %d] Zebrano parę dziecko+opiekun", nr_trasy);
+            } else {
+                DEBUG_PRINT("[PRZEWODNIK %d] Brak miejsca dla pary", nr_trasy);
+                break;
+            }
+        } else {
+            // Pojedyncza osoba (lub trasa 1 - nie ma par)
+            grupa_pids[zebrano++] = kolejka[idx++];
+        }
+    }
+    
+    *grupa_liczba = zebrano;
+    
+    if (zebrano == 0) {
+        sem_signal_safe(semid, SEM_MUTEX);
+        return 0;
+    }
+    
+    // Usuń z kolejki
+    for (int i = idx; i < *koniec; i++) {
+        kolejka[i - idx] = kolejka[i];
+        // Kopiuj flagę TYLKO dla trasy 2
+        if (nr_trasy == 2) {
+            stan->para_flaga[i - idx] = stan->para_flaga[i];
+        }
+    }
+    *koniec -= idx;
+    
+    log_success("[PRZEWODNIK %d] Zebrał grupę %d osób (w kolejce pozostało: %d)",
+               nr_trasy, zebrano, *koniec);
+    
+    sem_signal_safe(semid, SEM_MUTEX);
+    return zebrano;
 }
 
 void wypisz_stan_jaskini(StanJaskini *stan) {

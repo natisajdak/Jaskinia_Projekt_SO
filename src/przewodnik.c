@@ -202,94 +202,219 @@ void zwolnij_miejsce_na_trasie(int liczba_osob) {
 }
 
 int main(int argc, char *argv[]) {
+    int semid = atoi(getenv("SEMID"));
+
     if (argc < 2) {
         fprintf(stderr, "Użycie: %s <numer_trasy>\n", argv[0]);
         return 1;
     }
-    
+   
     numer_trasy = atoi(argv[1]);
     if (numer_trasy != 1 && numer_trasy != 2) return 1;
-    
+   
     log_info("[PRZEWODNIK %d] Startuje (PID: %d)", numer_trasy, getpid());
-    
+   
     shmid_global = atoi(getenv("SHMID"));
     semid_global = atoi(getenv("SEMID"));
     stan_global = podlacz_pamiec_dzielona(shmid_global);
-    
+   
     if (numer_trasy == 1) stan_global->pid_przewodnik1 = getpid();
     else stan_global->pid_przewodnik2 = getpid();
-    
+   
     signal(SIGUSR1, obsluga_zamkniecia);
     signal(SIGUSR2, obsluga_zamkniecia);
-    
+   
     int czas_trasy = (numer_trasy == 1) ? T1 : T2;
+    int max_na_trasie = (numer_trasy == 1) ? N1 : N2;
     int numer_wycieczki = 0;
-    
+    int sem_limit = (numer_trasy == 1) ? SEM_TRASA1_LIMIT : SEM_TRASA2_LIMIT;
+   
     while (!flaga_zamkniecie && stan_global->jaskinia_otwarta) {
-        numer_wycieczki++;
+        int sem_kolejka = (numer_trasy == 1) ? 
+        SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
+       
+        // Blokuj się i czekaj, aż ktoś faktycznie pojawi się w kolejce
+        sem_wait_safe(semid_global, sem_kolejka);
+       
+        // Sprawdzenie po obudzeniu, czy jaskinia nie została zamknięta
+        if (flaga_zamkniecie || !stan_global->jaskinia_otwarta) break;
+
+        // ZBIERZ GRUPĘ Z KOLEJKI
+        int liczba_w_grupie = zbierz_grupe(numer_trasy, stan_global, semid_global, max_na_trasie);
         
+        if (liczba_w_grupie <= 0) {
+        continue; 
+        }
+        
+        numer_wycieczki++;
+       
         log_info("[PRZEWODNIK %d] ════════════ WYCIECZKA #%d ════════════", numer_trasy, numer_wycieczki);
         
-        int max_na_trasie = (numer_trasy == 1 ? N1 : N2);
-        int liczba_w_grupie = losuj(3, max_na_trasie);
-        
-        log_info("[PRZEWODNIK %d] Grupa zebrana: %d osób", numer_trasy, liczba_w_grupie);
-        log_to_file((numer_trasy == 1) ? LOG_TRASA1 : LOG_TRASA2, 
+        log_success("[PRZEWODNIK %d] Grupa zebrana: %d osób", numer_trasy, liczba_w_grupie);
+        log_to_file((numer_trasy == 1) ? LOG_TRASA1 : LOG_TRASA2,
                     "Wycieczka #%d: START (grupa: %d osób)", numer_wycieczki, liczba_w_grupie);
 
-        if (flaga_zamkniecie) break;
+        // SPRAWDZENIE PRZED ROZPOCZĘCIEM
+        if (flaga_zamkniecie) {
+            log_warning("[PRZEWODNIK %d] Sygnał przed wyjściem - ANULACJA! Grupa się rozchodzi!", numer_trasy);
+            
+            // LOGUJ ANULOWANIE
+            log_to_file((numer_trasy == 1) ? LOG_TRASA1 : LOG_TRASA2,
+                        "Wycieczka #%d: ANULOWANA (zamknięcie przed startem, grupa: %d osób)", 
+                        numer_wycieczki, liczba_w_grupie);
+            
+            // Powiadom zwiedzających że wycieczka odwołana (wyślij sygnały wyjścia = wracają)
+            int sem_gotowa = (numer_trasy == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
+            for (int i = 0; i < liczba_w_grupie; i++) {
+                sem_signal_safe(semid_global, sem_gotowa);  // Odblokuj zwiedzających
+            }
+            
+            sem_wait_safe(semid_global, SEM_MUTEX);
+            if (numer_trasy == 1) stan_global->trasa1_czeka_na_grupe = 0;
+            else stan_global->trasa2_czeka_na_grupe = 0;
+            sem_signal_safe(semid_global, SEM_MUTEX);
+            
+            log_info("[PRZEWODNIK %d] Zwolniono %d zwiedzających z grupy", numer_trasy, liczba_w_grupie);
+            
+            goto koniec;
+        }
 
-        // KROK 1: Rezerwacja biletów (semafor pojemności trasy)
-        zajmij_miejsce_na_trasie(liczba_w_grupie);
+        // Oznacz że przewodnik czeka na grupę
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        if (numer_trasy == 1) {
+            stan_global->trasa1_czeka_na_grupe = 1;
+            stan_global->trasa1_wycieczka_nr = numer_wycieczki;
+        } else {
+            stan_global->trasa2_czeka_na_grupe = 1;
+            stan_global->trasa2_wycieczka_nr = numer_wycieczki;
+        }
+        sem_signal_safe(semid_global, SEM_MUTEX);
+
+        // REZERWACJA MIEJSC NA TRASIE (semafory limitów)
+        log_info("[PRZEWODNIK %d] Rezerwuję %d miejsc na trasie...", numer_trasy, liczba_w_grupie);
+        for (int i = 0; i < liczba_w_grupie; i++) {
+            sem_wait_safe(semid_global, sem_limit);
+        }
+        log_success("[PRZEWODNIK %d] Miejsca zarezerwowane", numer_trasy);
         
-        // KROK 2: Fizyczne wpuszczanie przez kładkę
-        wpusc_przez_kladke(liczba_w_grupie);
+        // POWIADOM ZWIEDZAJĄCYCH ŻE GRUPA UTWORZONA
+        int sem_gotowa = (numer_trasy == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
+        for (int i = 0; i < liczba_w_grupie; i++) {
+            sem_signal_safe(semid_global, sem_gotowa);
+        }
+        log_info("[PRZEWODNIK %d] Powiadomiłem zwiedzających, że grupa została utworzona.", numer_trasy);
         
-        // KROK 3: Zwiedzanie
+        // Pobierz tablicę PID-ów grupy
+        pid_t *grupa_pids = (numer_trasy == 1) ? stan_global->grupa1_pids : stan_global->grupa2_pids;
+        
+        // WPUSZCZANIE PRZEZ KŁADKĘ
+        wpusc_przez_kladke(grupa_pids, liczba_w_grupie);
+       
+        // ROZPOCZĘCIE WYCIECZKI
+        w_trakcie_wycieczki = 1;
+        
         log_info("[PRZEWODNIK %d] Trasa w toku (czas: %ds)...", numer_trasy, czas_trasy);
-        
+       
         sem_wait_safe(semid_global, SEM_MUTEX);
         if (numer_trasy == 1) stan_global->grupa1_aktywna = 1;
         else stan_global->grupa2_aktywna = 1;
         sem_signal_safe(semid_global, SEM_MUTEX);
-        
+       
+        // ZWIEDZANIE - jeśli sygnał przyjdzie tutaj, wycieczki dokończone
         sleep(czas_trasy);
         
-        // KROK 4: Powrót przez kładkę
-        wypusc_przez_kladke(liczba_w_grupie);
-        
-        // KROK 5: Oddanie "biletów" (zwolnienie miejsca na trasie)
-        zwolnij_miejsce_na_trasie(liczba_w_grupie);
-        
+        // KONIEC ZWIEDZANIA
+        w_trakcie_wycieczki = 0;
+       
+        // POWRÓT PRZEZ KŁADKĘ
+        log_info("[PRZEWODNIK %d] Powrót grupy...", numer_trasy);
+        wypusc_przez_kladke(grupa_pids, liczba_w_grupie);
+       
+        // ZWOLNIENIE MIEJSC
+        for (int i = 0; i < liczba_w_grupie; i++) {
+            sem_signal_safe(semid_global, sem_limit);
+        }
+        log_info("[PRZEWODNIK %d] Zwolniono semafory trasy (%d miejsc)", numer_trasy, liczba_w_grupie);
+       
         sem_wait_safe(semid_global, SEM_MUTEX);
-        if (numer_trasy == 1) stan_global->grupa1_aktywna = 0;
-        else stan_global->grupa2_aktywna = 0;
+        if (numer_trasy == 1) {
+            stan_global->grupa1_aktywna = 0;
+            stan_global->trasa1_czeka_na_grupe = 0;
+            for (int i = 0; i < liczba_w_grupie; i++) {
+                stan_global->grupa1_pids[i] = 0;
+            }
+            stan_global->grupa1_liczba = 0;
+        } else {
+            stan_global->grupa2_aktywna = 0;
+            stan_global->trasa2_czeka_na_grupe = 0;
+            for (int i = 0; i < liczba_w_grupie; i++) {
+                stan_global->grupa2_pids[i] = 0;
+            }
+            stan_global->grupa2_liczba = 0;
+        }
         sem_signal_safe(semid_global, SEM_MUTEX);
-        
-        log_to_file((numer_trasy == 1) ? LOG_TRASA1 : LOG_TRASA2, 
+       
+        log_to_file((numer_trasy == 1) ? LOG_TRASA1 : LOG_TRASA2,
                     "Wycieczka #%d: KONIEC", numer_wycieczki);
-        
+       
         log_success("[PRZEWODNIK %d] Wycieczka #%d zakończona sukcesem", numer_trasy, numer_wycieczki);
+       
+        // SPRAWDZENIE PO ZAKOŃCZENIU
+        if (flaga_zamkniecie) {
+            log_info("[PRZEWODNIK %d] Sygnał po zakończeniu wycieczki - kończę pracę", numer_trasy);
+            goto koniec;
+        }
         
-        if (flaga_zamkniecie) break;
-        sleep(2); // Odpoczynek przewodnika
+        sleep(1);
     }
-    
+   
+koniec:
     log_info("[PRZEWODNIK %d] Zakończono prowadzenie wycieczek", numer_trasy);
     log_success("[PRZEWODNIK %d] Łącznie przeprowadzono: %d wycieczek", numer_trasy, numer_wycieczki);
+   
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    int czekajacych = (numer_trasy == 1) ? 
+        stan_global->kolejka_trasa1_koniec : 
+        stan_global->kolejka_trasa2_koniec;
     
+    if (czekajacych > 0) {
+        log_info("[PRZEWODNIK %d] %d zwiedzających czeka w kolejce - zostaną poinformowani o zamknięciu", 
+                numer_trasy, czekajacych);
+        
+        // WYCZYŚĆ KOLEJKĘ (zwiedzający już nie będą wzięci w trasę)
+        if (numer_trasy == 1) {
+            stan_global->kolejka_trasa1_koniec = 0;
+        } else {
+            stan_global->kolejka_trasa2_koniec = 0;
+        }
+    }
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    
+    int sem_gotowa = (numer_trasy == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
+    
+    // Obudź zwiedzających (oni SAMI sprawdzą czy jaskinia otwarta)
+    for (int i = 0; i < czekajacych; i++) {
+        sem_signal_safe(semid_global, sem_gotowa);
+    }
+    
+    if (czekajacych > 0) {
+        log_info("[PRZEWODNIK %d] Poinformowano %d zwiedzających o zamknięciu", numer_trasy, czekajacych);
+    }
+   
     printf("\n");
-    printf("╔═══════════════════════════════════════════╗\n");
-    printf("║   PODSUMOWANIE PRZEWODNIKA TRASY %d        ║\n", numer_trasy);
-    printf("╚═══════════════════════════════════════════╝\n");
+    printf("╔═══════════════════════════════════════╗\n");
+    printf("║   PODSUMOWANIE PRZEWODNIKA TRASY %d   ║\n", numer_trasy);
+    printf("╚═══════════════════════════════════════╝\n");
+    sem_wait_safe(semid, SEM_MUTEX);
     printf("Przeprowadzono wycieczek: %d\n", numer_wycieczki);
     printf("Czas trasy:               %d sekund\n", czas_trasy);
     printf("Max osób na trasie:       %d\n", (numer_trasy == 1 ? N1 : N2));
     printf("Max osób na kładce:       %d\n", K);
+    sem_signal_safe(semid, SEM_MUTEX);
     printf("\n");
-    
+   
     odlacz_pamiec_dzielona(stan_global);
-    
+   
     return 0;
 }
  

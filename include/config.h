@@ -67,8 +67,10 @@ enum {
     SEM_TRASA2_LIMIT,
     SEM_KLADKA1,
     SEM_KLADKA2,
-    SEM_PRZEWODNIK1_READY,
-    SEM_PRZEWODNIK2_READY,
+    SEM_KOLEJKA1_NIEPUSTA,
+    SEM_KOLEJKA2_NIEPUSTA,  
+    SEM_PRZEWODNIK1_READY,      // Zwiedzający czeka na przewodnika 1
+    SEM_PRZEWODNIK2_READY,      // Zwiedzający czeka na przewodnika 2
     SEM_GRUPA1_WEJSCIE_KLADKA,  // Sygnał do zwiedzającego: wejdź na kładkę
     SEM_GRUPA2_WEJSCIE_KLADKA,  
     SEM_GRUPA1_WYJSCIE_KLADKA,  // Sygnał: wyjdź z kładki
