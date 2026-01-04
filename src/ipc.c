@@ -204,14 +204,28 @@ void usun_kolejke(int msgid) {
 void zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
     sem_wait_safe(semid, SEM_MUTEX);
     
-    if (stan->liczba_aktywnych < MAX_ZWIEDZAJACYCH) {
-        stan->zwiedzajacy_pids[stan->liczba_aktywnych] = pid;
-        stan->liczba_aktywnych++;
-        
-        DEBUG_PRINT("Zarejestrowano zwiedzającego PID %d (łącznie: %d)", 
-                    pid, stan->liczba_aktywnych);
-    } else {
-        log_warning("Przekroczono limit aktywnych zwiedzających!");
+    // Najpierw sprawdź, czy ten PID już tu jest (ochrona przed duplikatami)
+    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
+        if (stan->zwiedzajacy_pids[i] == pid) {
+            sem_signal_safe(semid, SEM_MUTEX);
+            return;
+        }
+    }
+
+    int zarejestrowano = 0;
+    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
+        if (stan->zwiedzajacy_pids[i] == 0) {
+            stan->zwiedzajacy_pids[i] = pid;
+            stan->liczba_aktywnych++; 
+            zarejestrowano = 1;
+            DEBUG_PRINT("Zarejestrowano zwiedzającego PID %d (aktywnych: %d)", 
+                       pid, stan->liczba_aktywnych);
+            break; 
+        }
+    }
+
+    if (!zarejestrowano) {
+        log_warning("Brak wolnych slotów dla zwiedzającego %d!", pid);
     }
     
     sem_signal_safe(semid, SEM_MUTEX);
@@ -221,23 +235,19 @@ void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
     sem_wait_safe(semid, SEM_MUTEX);
     
     int found = 0;
-    for (int i = 0; i < stan->liczba_aktywnych; i++) {
+    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
         if (stan->zwiedzajacy_pids[i] == pid) {
-            // Przesuń pozostałe PIDs
-            for (int j = i; j < stan->liczba_aktywnych - 1; j++) {
-                stan->zwiedzajacy_pids[j] = stan->zwiedzajacy_pids[j + 1];
-            }
+            stan->zwiedzajacy_pids[i] = 0;
             stan->liczba_aktywnych--;
             found = 1;
-            
-            DEBUG_PRINT("Wyrejestrowano zwiedzającego PID %d (pozostało: %d)",
-                        pid, stan->liczba_aktywnych);
-            break;
+            DEBUG_PRINT("Wyrejestrowano zwiedzającego PID %d (pozostało: %d)", 
+                       pid, stan->liczba_aktywnych);
+            break; 
         }
     }
     
     if (!found) {
-        log_warning("Nie znaleziono PID %d do wyrejestrowania", pid);
+        DEBUG_PRINT("PID %d nie istnieje już w tablicy", pid);
     }
     
     sem_signal_safe(semid, SEM_MUTEX);
