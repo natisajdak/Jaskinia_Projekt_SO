@@ -69,6 +69,11 @@ enum {
     SEM_KLADKA2,
     SEM_PRZEWODNIK1_READY,
     SEM_PRZEWODNIK2_READY,
+    SEM_GRUPA1_WEJSCIE_KLADKA,  // Sygnał do zwiedzającego: wejdź na kładkę
+    SEM_GRUPA2_WEJSCIE_KLADKA,  
+    SEM_GRUPA1_WYJSCIE_KLADKA,  // Sygnał: wyjdź z kładki
+    SEM_GRUPA2_WYJSCIE_KLADKA,
+    SEM_POTWIERDZENIE,          // Zwiedzający potwierdza akcję
     NUM_SEMS
 };
 

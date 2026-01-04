@@ -58,8 +58,7 @@ void usun_pamiec_dzielona(int shmid) {
 
 // === SEMAFORY ===
 int utworz_semafory(void) {
-    int semid = semget(IPC_PRIVATE, NUM_SEMS, IPC_CREAT | 0600
-);
+    int semid = semget(IPC_PRIVATE, NUM_SEMS, IPC_CREAT | 0600);
     
     if (semid < 0) {
         perror("semget");
@@ -109,6 +108,14 @@ void inicjalizuj_semafory(int semid) {
     arg.val = 0;
     semctl(semid, SEM_PRZEWODNIK2_READY, SETVAL, arg);
     log_info("Semafor SEM_PRZEWODNIK2_READY = 0");
+
+    arg.val = 0;
+    semctl(semid, SEM_GRUPA1_WEJSCIE_KLADKA, SETVAL, arg);
+    semctl(semid, SEM_GRUPA2_WEJSCIE_KLADKA, SETVAL, arg);
+    semctl(semid, SEM_GRUPA1_WYJSCIE_KLADKA, SETVAL, arg);
+    semctl(semid, SEM_GRUPA2_WYJSCIE_KLADKA, SETVAL, arg);
+    semctl(semid, SEM_POTWIERDZENIE, SETVAL, arg);
+    log_info("Semafory komunikacji zwiedzający-przewodnik = 0");
     
     log_success("Wszystkie semafory zainicjalizowane");
 }
@@ -168,8 +175,7 @@ void usun_semafory(int semid) {
 
 // === KOLEJKA KOMUNIKATÓW ===
 int utworz_kolejke(void) {
-    int msgid = msgget(IPC_PRIVATE, IPC_CREAT | 0600
-);
+    int msgid = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
     
     if (msgid < 0) {
         perror("msgget");
