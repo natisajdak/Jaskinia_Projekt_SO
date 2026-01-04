@@ -15,7 +15,6 @@
 #include "../include/ipc.h"
 #include "../include/utils.h"
 
-
 // Flaga ewakuacji
 volatile sig_atomic_t flaga_ewakuacja = 0;
 
@@ -106,6 +105,72 @@ int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     return 1;
 }
 
+void wycieczka_dziecka(pid_t dziecko_pid, int trasa, int msgid, StanJaskini *stan, int semid) {
+    Zwiedzajacy dziecko;
+    dziecko.wiek = losuj(1, WIEK_TYLKO_TRASA2_DZIECKO - 1);
+    dziecko.trasa = trasa;  // TĄ SAMĄ CO OPIEKUN
+    dziecko.czy_powrot = 0;
+    dziecko.jest_dzieckiem = 1;
+    dziecko.jest_opiekunem = 0;
+    dziecko.pid_opiekuna = getppid();  // PID rodzica (opiekuna)
+    dziecko.pid_dziecka = 0;
+    
+    log_info("[DZIECKO %d] Wiek: %d, Opiekun: PID %d, Trasa: %d", 
+             dziecko_pid, dziecko.wiek, dziecko.pid_opiekuna, trasa);
+    
+    zarejestruj_zwiedzajacego(stan, dziecko_pid, semid);
+    
+    if (!kup_bilet(&dziecko, msgid, dziecko_pid)) {
+        wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
+        exit(1);
+    }
+    
+    // DZIECKO NIE DOŁĄCZA - opiekun doda ich oboje atomowo!
+    // Tylko czeka na przewodnika
+    int sem_gotowa = (dziecko.trasa == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
+    log_info("[DZIECKO %d] Czekam na przewodnika razem z opiekunem...", dziecko_pid);
+    sem_wait_safe(semid, sem_gotowa);
+    
+    if (!stan->jaskinia_otwarta || flaga_ewakuacja) {
+        log_warning("[DZIECKO %d] Jaskinia zamknięta - wychodzę z opiekunem", dziecko_pid);
+        wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
+        exit(0);
+    }
+    
+    log_success("[DZIECKO %d] Przewodnik zabrał nas w trasę!", dziecko_pid);
+    
+    // WEJŚCIE NA KŁADKĘ
+    int sem_wejscie = (dziecko.trasa == 1) ? SEM_GRUPA1_WEJSCIE_KLADKA : SEM_GRUPA2_WEJSCIE_KLADKA;
+    
+    log_info("[DZIECKO %d] Wchodzę na kładkę z opiekunem", dziecko_pid);
+    sem_wait_safe(semid, sem_wejscie);
+    sem_signal_safe(semid, SEM_POTWIERDZENIE);
+    
+    // WYCIECZKA
+    int czas_wycieczki = (dziecko.trasa == 1) ? T1 : T2;
+    log_info("[DZIECKO %d] Zwiedzam z grupą i opiekunem (%d sek)...", dziecko_pid, czas_wycieczki);
+    sleep(czas_wycieczki);
+    
+    if (flaga_ewakuacja) {
+        log_warning("[DZIECKO %d] Ewakuacja podczas wycieczki!", dziecko_pid);
+        wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
+        exit(0);
+    }
+    
+    log_success("[DZIECKO %d] Wycieczka zakończona!", dziecko_pid);
+    
+    // WYJŚCIE
+    int sem_wyjscie = (dziecko.trasa == 1) ? SEM_GRUPA1_WYJSCIE_KLADKA : SEM_GRUPA2_WYJSCIE_KLADKA;
+    
+    log_info("[DZIECKO %d] Wychodzę z jaskini razem z opiekunem", dziecko_pid);
+    sem_wait_safe(semid, sem_wyjscie);
+    sem_signal_safe(semid, SEM_POTWIERDZENIE);
+    
+    log_success("[DZIECKO %d] Opuściłem jaskinię z opiekunem", dziecko_pid);
+    
+    wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
+}
+
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -115,7 +180,6 @@ int main(int argc, char *argv[]) {
     
     signal(SIGTERM, obsluga_ewakuacji);
     
-    // Pobierz IPC
     int shmid = atoi(getenv("SHMID"));
     int semid = atoi(getenv("SEMID"));
     int msgid = atoi(getenv("MSGID"));
@@ -143,8 +207,8 @@ int main(int argc, char *argv[]) {
     // Wariant 1: DOROSŁY Z DZIECKIEM (30% szans)
     if (zw.wiek >= WIEK_DOROSLY && losuj_szanse(SZANSA_OPIEKUN_Z_DZIECKIEM)) {
         zw.jest_opiekunem = 1;
-        zw.trasa = 2;  // Dzieci tylko trasa 2
-        // Utwórz proces dziecka
+        zw.trasa = 2;  // Opiekun z dzieckiem zawsze trasa 2
+        
         pid_t pid_dziecko = fork();
         
         if (pid_dziecko == 0) {
@@ -152,42 +216,21 @@ int main(int argc, char *argv[]) {
             pid_t dziecko_pid = getpid();
             srand(dziecko_pid ^ time(NULL));
             
-            Zwiedzajacy dziecko;
-            dziecko.wiek = losuj(1, WIEK_TYLKO_TRASA2_DZIECKO - 1);  // 1-7 lat
-            dziecko.trasa = 2;  // Dzieci tylko trasa 2
-            dziecko.czy_powrot = 0;
-            dziecko.jest_dzieckiem = 1;
-            dziecko.jest_opiekunem = 0;
-            dziecko.pid_opiekuna = moj_pid;  // PID rodzica
-            dziecko.pid_dziecka = 0;
+            // Dziecko przechodzi TĘ SAMĄ trasę co opiekun
+            wycieczka_dziecka(dziecko_pid, zw.trasa, msgid, stan, semid);
             
-            log_info("[DZIECKO %d] Wiek: %d, Opiekun: PID %d", 
-                     dziecko_pid, dziecko.wiek, moj_pid);
-            
-            zarejestruj_zwiedzajacego(stan, dziecko_pid, semid);
-            
-            // Dziecko kupuje bilet (z odniesieneim do opiekuna)
-            if (kup_bilet(&dziecko, msgid, dziecko_pid)) {
-                // Symuluj wycieczkę z opiekunem
-                log_info("[DZIECKO %d] Wycieczka z opiekunem...", dziecko_pid);
-                sleep(T2);
-                log_success("[DZIECKO %d] Koniec wycieczki!", dziecko_pid);
-            }
-            
-            wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
             odlacz_pamiec_dzielona(stan);
             exit(0);
         } else if (pid_dziecko > 0) {
-            // Rodzic (opiekun)
             zw.pid_dziecka = pid_dziecko;
-            log_info("[OPIEKUN %d] Mam dziecko: PID %d", moj_pid, pid_dziecko);
+            log_info("[OPIEKUN %d] Mam dziecko: PID %d (oboje trasa %d)", moj_pid, pid_dziecko, zw.trasa);
         }
     }
     
     // Senior >75 lat: wymuś trasę 2
     if (zw.wiek > WIEK_TYLKO_TRASA2_SENIOR) {
-    zw.trasa = 2;
-    log_info("[ZWIEDZAJACY %d] Senior - wymuszona trasa 2", moj_pid);
+        zw.trasa = 2;
+        log_info("[ZWIEDZAJACY %d] Senior - wymuszona trasa 2", moj_pid);
     }
     
     log_info("[ZWIEDZAJĄCY %d] Wiek: %d, Trasa: %d, Typ: %s",
@@ -207,32 +250,98 @@ kupno_biletu:
         goto wyjscie;
     }
     
-    // === WYCIECZKA ===
-    int czas_wycieczki = (zw.trasa == 1) ? T1 : T2;
+    if (zw.jest_opiekunem && zw.pid_dziecka > 0) {
+    // Poczekaj aż dziecko kupi bilet
+    sleep(1);
     
-    log_info("[ZWIEDZAJĄCY %d] Czekam na przewodnika...", moj_pid);
-    sleep(losuj(1, 3));
-    
-    if (!stan->jaskinia_otwarta) {
-        log_warning("[ZWIEDZAJĄCY %d] Jaskinia zamknięta przed wycieczką", moj_pid);
+    // ATOMOWO dodaj parę do kolejki
+    if (!dolacz_pare_do_kolejki(zw.trasa, zw.pid_dziecka, moj_pid, stan, semid)) {
+        log_error("[OPIEKUN %d] Nie można dołączyć do kolejki!", moj_pid);
         goto wyjscie;
     }
     
-    log_info("[ZWIEDZAJĄCY %d] Wycieczka (trasa %d, %d sek)...",
-             moj_pid, zw.trasa, czas_wycieczki);
+    // Obudź przewodnika
+    int sem_kolejka = (zw.trasa == 1) ? 
+        SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
+    sem_signal_safe(semid, sem_kolejka);
     
-    for (int i = 0; i < czas_wycieczki; i++) {
-        if (flaga_ewakuacja) {
-            log_warning("[ZWIEDZAJĄCY %d] Ewakuacja!", moj_pid);
-            goto wyjscie;
-        }
-        sleep(1);
+    log_info("[OPIEKUN %d] Czekam w kolejce z dzieckiem PID %d na trasę %d...", 
+             moj_pid, zw.pid_dziecka, zw.trasa);
+    } else {
+    // Normalnie - pojedyncza osoba
+    dolacz_do_kolejki(zw.trasa, moj_pid, stan, semid);
+    int sem_kolejka = (zw.trasa == 1) ? 
+        SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
+    sem_signal_safe(semid, sem_kolejka);
+    
+    log_info("[ZWIEDZAJĄCY %d] Czekam w kolejce na trasę %d...", moj_pid, zw.trasa);
+}
+    
+    // Blokuj tutaj aż przewodnik zbierze grupę i wyśle sygnał
+    int sem_gotowa = (zw.trasa == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
+    sem_wait_safe(semid, sem_gotowa);
+    
+    // Sprawdź czy jaskinia otwarta
+    if (!stan->jaskinia_otwarta || flaga_ewakuacja) {
+        log_warning("[ZWIEDZAJĄCY %d] Jaskinia zamknięta - opuszczam kolejkę i wychodzę", moj_pid);
+        goto wyjscie;
+    }
+    
+    log_success("[ZWIEDZAJĄCY %d] Przewodnik zabrał mnie w trasę!", moj_pid);
+    
+    // === WEJŚCIE NA KŁADKĘ ===
+    int sem_wejscie = (zw.trasa == 1) ? SEM_GRUPA1_WEJSCIE_KLADKA : SEM_GRUPA2_WEJSCIE_KLADKA;
+    
+    log_info("[ZWIEDZAJĄCY %d] Czekam na sygnał wejścia na kładkę...", moj_pid);
+    sem_wait_safe(semid, sem_wejscie);
+    
+    if (zw.jest_opiekunem) {
+        log_info("[OPIEKUN %d] Wchodzę na kładkę z dzieckiem", moj_pid);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Wchodzę na kładkę", moj_pid);
+    }
+    
+    // Potwierdzenie że jestem na kładce
+    sem_signal_safe(semid, SEM_POTWIERDZENIE);
+    
+    // === WYCIECZKA (PASYWNE CZEKANIE) ===
+    int czas_wycieczki = (zw.trasa == 1) ? T1 : T2;
+    
+    if (zw.jest_opiekunem) {
+        log_info("[OPIEKUN %d] Zwiedzam trasę %d z dzieckiem (%d sek)...", 
+                 moj_pid, zw.trasa, czas_wycieczki);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Zwiedzam trasę %d (%d sek)...", 
+                 moj_pid, zw.trasa, czas_wycieczki);
+    }
+    
+    sleep(czas_wycieczki);
+    
+    if (flaga_ewakuacja) {
+        log_warning("[ZWIEDZAJĄCY %d] Ewakuacja podczas wycieczki!", moj_pid);
+        goto wyjscie;
     }
     
     log_success("[ZWIEDZAJĄCY %d] Wycieczka zakończona!", moj_pid);
     
-    // === POWTÓRKA (10% szans) ===
-    if (!zw.czy_powrot && losuj_szanse(SZANSA_POWROT)) {
+    // === WYJŚCIE Z JASKINI ===
+    int sem_wyjscie = (zw.trasa == 1) ? SEM_GRUPA1_WYJSCIE_KLADKA : SEM_GRUPA2_WYJSCIE_KLADKA;
+    
+    log_info("[ZWIEDZAJĄCY %d] Czekam na sygnał wyjścia...", moj_pid);
+    sem_wait_safe(semid, sem_wyjscie);
+    
+    if (zw.jest_opiekunem) {
+        log_info("[OPIEKUN %d] Wychodzę przez kładkę z dzieckiem", moj_pid);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Wychodzę przez kładkę", moj_pid);
+    }
+    
+    sem_signal_safe(semid, SEM_POTWIERDZENIE);
+    
+    log_success("[ZWIEDZAJĄCY %d] Opuściłem jaskinię", moj_pid);
+    
+    // === POWTÓRKA (10% szans) - ALE NIE DLA OPIEKUNÓW Z DZIEĆMI ===
+    if (!zw.czy_powrot && !zw.jest_opiekunem && losuj_szanse(SZANSA_POWROT)) {
         if (!stan->jaskinia_otwarta) {
             log_info("[ZWIEDZAJĄCY %d] Chciałem powtórzyć, ale zamknięte", moj_pid);
             goto wyjscie;
@@ -241,7 +350,7 @@ kupno_biletu:
         log_info("[ZWIEDZAJĄCY %d] POWTÓRKA! (50%% zniżki, omijam kolejkę)", moj_pid);
         
         zw.czy_powrot = 1;
-        zw.trasa = (zw.trasa == 1) ? 2 : 1;  // Inna trasa
+        zw.trasa = (zw.trasa == 1) ? 2 : 1;
         
         // Sprawdź regulamin
         if (zw.wiek < WIEK_TYLKO_TRASA2_DZIECKO || zw.wiek > WIEK_TYLKO_TRASA2_SENIOR) {
@@ -253,14 +362,18 @@ kupno_biletu:
     }
     
 wyjscie:
-    log_info("[ZWIEDZAJĄCY %d] Opuszczam jaskinię", moj_pid);
+    if (zw.jest_opiekunem) {
+        log_info("[OPIEKUN %d] Opuszczam jaskinię i czekam na dziecko...", moj_pid);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Opuszczam jaskinię (koniec)", moj_pid);
+    }
     
-    // Jeśli opiekun - poczekaj na dziecko
+    // Jeśli opiekun - poczekaj na dziecko (wychodzą RAZEM)
     if (zw.jest_opiekunem && zw.pid_dziecka > 0) {
         log_info("[OPIEKUN %d] Czekam na dziecko PID %d...", moj_pid, zw.pid_dziecka);
         int status;
         waitpid(zw.pid_dziecka, &status, 0);
-        log_info("[OPIEKUN %d] Dziecko wyszło", moj_pid);
+        log_success("[OPIEKUN %d] Dziecko wyszło - wychodzimy razem!", moj_pid);
     }
     
     wyrejestruj_zwiedzajacego(stan, moj_pid, semid);

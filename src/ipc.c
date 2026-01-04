@@ -253,6 +253,39 @@ void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
     sem_signal_safe(semid, SEM_MUTEX);
 }
 
+// === ATOMOWE DODAWANIE PARY OPIEKUN-DZIECKO ===
+int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun, 
+                           StanJaskini *stan, int semid) {
+    // Pary ZAWSZE trasa 2!
+     if (trasa != 2) {
+        log_error("BŁĄD: Opiekun z dzieckiem może tylko trasą 2!");
+        return 0;
+    }
+    
+    sem_wait_safe(semid, SEM_MUTEX);
+    
+    if (stan->kolejka_trasa2_koniec + 2 <= MAX_ZWIEDZAJACYCH) {
+        int idx_d = stan->kolejka_trasa2_koniec++;
+        int idx_o = stan->kolejka_trasa2_koniec++;
+        
+        stan->kolejka_trasa2[idx_d] = pid_dziecko;
+        stan->kolejka_trasa2[idx_o] = pid_opiekun;
+        
+        stan->para_flaga[idx_d] = 1;  // ← PARA!
+        stan->para_flaga[idx_o] = 0;  // Drugi element pary
+        
+        log_info("[KOLEJKA T2] Para dziecko %d + opiekun %d dołączyli (pozycje %d-%d)",
+                 pid_dziecko, pid_opiekun, idx_d + 1, idx_o + 1);
+        
+        sem_signal_safe(semid, SEM_MUTEX);
+        return 1;
+    } else {
+        log_error("[KOLEJKA T2] Brak miejsca dla pary!");
+        sem_signal_safe(semid, SEM_MUTEX);
+        return 0;
+    }
+}
+
 //  KOLEJKOWANIE ZWIEDZAJĄCYCH 
 void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid) {
     sem_wait_safe(semid, SEM_MUTEX);
