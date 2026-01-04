@@ -192,14 +192,6 @@ void wypusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
     log_success("[PRZEWODNIK %d] Wszyscy wyszli na zewnątrz", numer_trasy);
 }
 
-void zwolnij_miejsce_na_trasie(int liczba_osob) {
-    int sem_limit = (numer_trasy == 1) ? SEM_TRASA1_LIMIT : SEM_TRASA2_LIMIT;
-    
-    for (int i = 0; i < liczba_osob; i++) {
-        sem_signal_safe(semid_global, sem_limit); 
-    }
-    log_info("[PRZEWODNIK %d] Zwolniono semafory trasy (%d miejsc)", numer_trasy, liczba_osob);
-}
 
 int main(int argc, char *argv[]) {
     int semid = atoi(getenv("SEMID"));
@@ -381,7 +373,7 @@ koniec:
         log_info("[PRZEWODNIK %d] %d zwiedzających czeka w kolejce - zostaną poinformowani o zamknięciu", 
                 numer_trasy, czekajacych);
         
-        // WYCZYŚĆ KOLEJKĘ (zwiedzający już nie będą wzięci w trasę)
+        // WYCZYŚĆ KOLEJKĘ 
         if (numer_trasy == 1) {
             stan_global->kolejka_trasa1_koniec = 0;
         } else {
@@ -392,7 +384,6 @@ koniec:
     
     int sem_gotowa = (numer_trasy == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
     
-    // Obudź zwiedzających (oni SAMI sprawdzą czy jaskinia otwarta)
     for (int i = 0; i < czekajacych; i++) {
         sem_signal_safe(semid_global, sem_gotowa);
     }
@@ -417,7 +408,6 @@ koniec:
    
     return 0;
 }
- 
     
     
 
