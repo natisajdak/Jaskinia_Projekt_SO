@@ -12,17 +12,13 @@
 #include "../include/ipc.h"
 #include "../include/utils.h"
 
-// Parametry przewodnika
-int numer_trasy;  // 1 lub 2
+int numer_trasy;
 int shmid_global, semid_global;
 StanJaskini *stan_global = NULL;
 
-// Flaga zamknięcia (sygnał)
 volatile sig_atomic_t flaga_zamkniecie = 0;
-
 volatile sig_atomic_t w_trakcie_wycieczki = 0;
 
-// Obsługa sygnału zamknięcia
 void obsluga_zamkniecia(int sig) {
     if (sig == SIGUSR1 || sig == SIGUSR2) {
         flaga_zamkniecie = 1;
@@ -34,7 +30,6 @@ void obsluga_zamkniecia(int sig) {
     }
 }
 
-// WEJŚCIE PRZEZ KŁADKĘ 
 void wpusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
     (void)grupa_pids;
     
@@ -115,7 +110,7 @@ void wpusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
     
     log_success("[PRZEWODNIK %d] Wszyscy weszli na trasę", numer_trasy);
 }
-// WYJŚCIE PRZEZ KŁADKĘ 
+
 void wypusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
     (void)grupa_pids;
     
@@ -191,7 +186,6 @@ void wypusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
     
     log_success("[PRZEWODNIK %d] Wszyscy wyszli na zewnątrz", numer_trasy);
 }
-
 
 int main(int argc, char *argv[]) {
     int semid = atoi(getenv("SEMID"));
@@ -364,6 +358,8 @@ koniec:
     log_info("[PRZEWODNIK %d] Zakończono prowadzenie wycieczek", numer_trasy);
     log_success("[PRZEWODNIK %d] Łącznie przeprowadzono: %d wycieczek", numer_trasy, numer_wycieczki);
    
+    // POPRAWKA: Przewodnik NIE "wyrzuca" zwiedzających
+    // Zwiedzający SAMI sprawdzą stan->jaskinia_otwarta i wyjdą
     sem_wait_safe(semid_global, SEM_MUTEX);
     int czekajacych = (numer_trasy == 1) ? 
         stan_global->kolejka_trasa1_koniec : 
@@ -373,7 +369,7 @@ koniec:
         log_info("[PRZEWODNIK %d] %d zwiedzających czeka w kolejce - zostaną poinformowani o zamknięciu", 
                 numer_trasy, czekajacych);
         
-        // WYCZYŚĆ KOLEJKĘ 
+        // WYCZYŚĆ KOLEJKĘ (zwiedzający już nie będą wzięci w trasę)
         if (numer_trasy == 1) {
             stan_global->kolejka_trasa1_koniec = 0;
         } else {
@@ -384,6 +380,7 @@ koniec:
     
     int sem_gotowa = (numer_trasy == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
     
+    // Obudź zwiedzających (oni SAMI sprawdzą czy jaskinia otwarta)
     for (int i = 0; i < czekajacych; i++) {
         sem_signal_safe(semid_global, sem_gotowa);
     }
@@ -408,6 +405,3 @@ koniec:
    
     return 0;
 }
-    
-    
-
