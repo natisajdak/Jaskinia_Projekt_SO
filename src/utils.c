@@ -45,6 +45,7 @@ void log_info(const char *format, ...) {
     vprintf(format, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void log_success(const char *format, ...) {
@@ -54,6 +55,7 @@ void log_success(const char *format, ...) {
     vprintf(format, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void log_warning(const char *format, ...) {
@@ -63,6 +65,7 @@ void log_warning(const char *format, ...) {
     vprintf(format, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void log_error(const char *format, ...) {
@@ -72,6 +75,7 @@ void log_error(const char *format, ...) {
     vfprintf(stderr, format, args);
     va_end(args);
     fprintf(stderr, "\n");
+    fflush(stderr);
 }
 
 // === CZAS ===
