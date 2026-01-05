@@ -15,6 +15,7 @@ void log_warning(const char *format, ...);
 void log_error(const char *format, ...);
 
 // === CZAS ===
+
 // Zwraca czas od startu symulacji (sekundy)
 int czas_od_startu(time_t start);
 
@@ -22,6 +23,7 @@ int czas_od_startu(time_t start);
 void format_timestamp(char *buf, size_t size, time_t t);
 
 // === LOSOWANIE ===
+
 // Losowa liczba z zakresu [min, max]
 int losuj(int min, int max);
 
@@ -29,6 +31,7 @@ int losuj(int min, int max);
 int losuj_szanse(int prob);
 
 // === WALIDACJA ===
+
 // Sprawdź czy zwiedzający może wejść na daną trasę
 int waliduj_trase(int wiek, int trasa);
 
