@@ -56,21 +56,63 @@ void cleanup(void) {
 void obsluga_sigint(int sig) {
     (void)sig;
     printf("\n");
-    log_warning("Otrzymano SIGINT (Ctrl+C) - kończenie symulacji...");
-    
-    // Ustaw flagi zamknięcia
+    log_warning("╔═══════════════════════════════════════╗");
+    log_warning("║    OTRZYMANO SIGINT (Ctrl+C)          ║");
+    log_warning("║    AWARYJNE ZAMYKANIE JASKINI...      ║");
+    log_warning("╚═══════════════════════════════════════╝");
+
     if (stan_global) {
+        sem_wait_safe(semid_global, SEM_MUTEX);
         stan_global->zamkniecie_przewodnik1 = 1;
         stan_global->zamkniecie_przewodnik2 = 1;
         stan_global->jaskinia_otwarta = 0;
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
+        log_warning("→ Jaskinia oznaczona jako ZAMKNIĘTA");
+        
+        // Wyślij sygnały do przewodników
+        if (stan_global->pid_przewodnik1 > 0) {
+            log_info("→ Wysyłam SIGUSR1 do przewodnika 1 (PID %d)", stan_global->pid_przewodnik1);
+            kill(stan_global->pid_przewodnik1, SIGUSR1);
+        }
+        
+        if (stan_global->pid_przewodnik2 > 0) {
+            log_info("→ Wysyłam SIGUSR2 do przewodnika 2 (PID %d)", stan_global->pid_przewodnik2);
+            kill(stan_global->pid_przewodnik2, SIGUSR2);
+        }
+        
+        // Ewakuuj zwiedzających
+        log_warning("→ Ewakuacja aktywnych zwiedzających...");
+        
+        int ewakuowani = 0;
+        for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
+            if (stan_global->zwiedzajacy_pids[i] > 0) {
+                kill(stan_global->zwiedzajacy_pids[i], SIGTERM);
+                ewakuowani++;
+            }
+        }
+        
+        log_success("→ Wysłano sygnały ewakuacji do %d zwiedzających", ewakuowani);
     }
-    
+
     // Zakończ wszystkie procesy potomne
+    log_info("→ Zakańczam procesy potomne...");
     for (int i = 0; i < liczba_procesow; i++) {
         if (pids[i] > 0) {
             kill(pids[i], SIGTERM);
         }
     }
+    
+    sleep(2);
+    
+    log_warning("→ Wymuszam zakończenie pozostałych procesów...");
+    for (int i = 0; i < liczba_procesow; i++) {
+        if (pids[i] > 0) {
+            kill(pids[i], SIGKILL);
+        }
+    }
+    
+    log_success("AWARYJNE ZAMKNIĘCIE ZAKOŃCZONE");
     
     exit(0);
 }
