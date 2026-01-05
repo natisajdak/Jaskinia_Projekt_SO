@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
@@ -77,7 +78,7 @@ void czekaj_na_zakonczenie_wycieczek() {
         
         if (trasa1_osoby == 0 && trasa2_osoby == 0 && !g1_aktywna && !g2_aktywna) {
             log_success("[STRAŻNIK] Wszystkie wycieczki zakończone, jaskinia pusta!");
-            log_success("[STRAŻNIK] Godzina zamknięcia: %02d:00 (symulowane)", TK);
+            log_success("[STRAŻNIK] Godzina zamknięcia: %02d:00 (symulowane)", TK); 
             break;
         }
         
@@ -169,6 +170,7 @@ int main() {
     }
     log_success("[STRAŻNIK] Przewodnicy zarejestrowani");
     
+    monitoruj_jaskinie();
     wyslij_sygnaly_zamkniecia();
     czekaj_na_zakonczenie_wycieczek();
     
@@ -189,7 +191,6 @@ int main() {
 
     printf("\n");
     
-    // POPRAWKA: Policz tylko tych co są FAKTYCZNIE aktywni (nie w kolejce)
     int faktycznie_aktywni = 0;
     for(int i=0; i<100; i++) {
         if(stan->zwiedzajacy_pids[i] > 0) faktycznie_aktywni++;
