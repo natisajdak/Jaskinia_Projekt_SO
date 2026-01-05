@@ -42,28 +42,54 @@ typedef struct {
     // Flagi zamknięcia
     volatile sig_atomic_t zamkniecie_przewodnik1;
     volatile sig_atomic_t zamkniecie_przewodnik2;
-
     
     int jaskinia_otwarta;  // 1 = otwarta, 0 = zamknięta
     
     // Tablica aktywnych zwiedzających (do ewakuacji)
-    pid_t zwiedzajacy_pids[MAX_ZWIEDZAJACYCH];
+    pid_t zwiedzajacy_pids[MAX_ZWIEDZAJACYCH];  // MAX_ZWIEDZAJACYCH
     int liczba_aktywnych;
     
     // Czas startu symulacji (dla logów)
     time_t czas_startu;
     
+    // === NOWE: System czasu symulacji ===
+    time_t czas_rzeczywisty_start;  // Kiedy symulacja wystartowała (real time)
+    int symulowany_czas_sekund;      // Ile sekund minęło w symulacji
+
+    int trasa1_wycieczka_nr;  // Numer bieżącej wycieczki
+    int trasa2_wycieczka_nr;
+    int trasa1_czeka_na_grupe; // 1 = przewodnik czeka na grupę
+    int trasa2_czeka_na_grupe;
+
+    // === NOWE: KOLEJKI OCZEKUJĄCYCH ===
+    pid_t kolejka_trasa1[MAX_ZWIEDZAJACYCH];  // MAX_ZWIEDZAJACYCH
+    int kolejka_trasa1_poczatek;
+    int kolejka_trasa1_koniec;
+    
+    pid_t kolejka_trasa2[MAX_ZWIEDZAJACYCH];
+    int kolejka_trasa2_poczatek;
+    int kolejka_trasa2_koniec;
+    
+    int para_flaga[MAX_ZWIEDZAJACYCH];  //PARA OPIEKUN+DZIECKO TYLKO NA TRASIE 2
+
+    // NOWE: Aktualne grupy w trasie (lista PID-ów)
+    pid_t grupa1_pids[N1];  // N1
+    int grupa1_liczba;
+    
+    pid_t grupa2_pids[N2];  // N2
+    int grupa2_liczba;
+    
 } StanJaskini;
 
 // KOLEJKA KOMUNIKATÓW (Kasjer ↔ Zwiedzający)
 typedef struct {
-    long mtype;  // MSG_BILET_REQUEST_ZWYKLY (100) lub MSG_BILET_REQUEST_POWROT (200)
+    long mtype; 
     
     // Dane zwiedzającego (request)
     int zwiedzajacy_pid;
     int wiek;
     int trasa;
-    int czy_powrot;              // 1=powtórka (dostaje mtype=200!)
+    int czy_powrot;             
     
     int jest_opiekunem;          // 1=ten zwiedzający jest opiekunem dziecka
     int pid_opiekuna;            // PID opiekuna (jeśli dziecko)
@@ -107,6 +133,15 @@ void usun_kolejke(int msgid);
 
 void zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid);
 void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid);
+
+// === Funkcje kolejkowania ===
+// Zwiedzający dołącza do kolejki oczekujących na trasę
+void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid);
+
+// Przewodnik zbiera grupę z kolejki (zwraca liczbę zebranych osób)
+int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob);
+int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun, 
+                           StanJaskini *stan, int semid);
 
 // Funkcje pomocnicze
 void wypisz_stan_jaskini(StanJaskini *stan);
