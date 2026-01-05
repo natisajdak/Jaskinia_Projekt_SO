@@ -77,6 +77,7 @@ void czekaj_na_zakonczenie_wycieczek() {
         
         if (trasa1_osoby == 0 && trasa2_osoby == 0 && !g1_aktywna && !g2_aktywna) {
             log_success("[STRAŻNIK] Wszystkie wycieczki zakończone, jaskinia pusta!");
+            log_success("[STRAŻNIK] Godzina zamknięcia: %02d:00 (symulowane)", TK);
             break;
         }
         
@@ -109,6 +110,33 @@ void czekaj_na_zakonczenie_wycieczek() {
     if (ewakuowani > 0) {
         log_warning("[STRAŻNIK] Ewakuowano %d zwiedzających", ewakuowani);
         sleep(2);  // Daj czas na reakcję
+    }
+}
+
+void monitoruj_jaskinie() { 
+    int czas_do_zamkniecia = CZAS_OTWARCIA_SEK - 10;
+    if (czas_do_zamkniecia < 5) czas_do_zamkniecia = 5;
+
+    log_info("[STRAŻNIK] Wyślę sygnały zamknięcia za ok. %d sekund", czas_do_zamkniecia);
+    log_info("[STRAŻNIK] Jaskinia otwarta: %02d:00, zamknie się: %02d:00 (symulowane)", TP, TK);
+    
+    sem_wait_safe(semid, SEM_MUTEX);
+    time_t start = stan->czas_startu;
+    sem_signal_safe(semid, SEM_MUTEX);
+    while (czas_od_startu(start) < czas_do_zamkniecia && stan->jaskinia_otwarta) {
+        sleep(5);
+        sem_wait_safe(semid, SEM_MUTEX);
+        
+        // Oblicz symulowaną godzinę
+        int czas_od_otwarcia = czas_od_startu(start);
+        int sekund_w_symulacji = czas_od_otwarcia * PRZYSPIESZENIE;
+        int godzina_symulowana = TP + (sekund_w_symulacji / 3600);
+        int minuta_symulowana = (sekund_w_symulacji % 3600) / 60;
+
+        log_info("[STRAŻNIK] Symulowana godzina: %02d:%02d", 
+        godzina_symulowana, minuta_symulowana);
+        
+        sem_signal_safe(semid, SEM_MUTEX);
     }
 }
 

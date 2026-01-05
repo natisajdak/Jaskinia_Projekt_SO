@@ -27,8 +27,13 @@
 #define T2 15              
 
 // Godziny otwarcia
-#define TP 0                
-#define TK 180             
+#define TP 10                
+#define TK 18             
+
+// Przyspieszenie symulacji
+// 240 = 4 minuty rzeczywiste = 1 sekunda symulacji (8h = 2 minuty)
+#define PRZYSPIESZENIE 240
+#define CZAS_OTWARCIA_SEK ((TK - TP) * 3600 / PRZYSPIESZENIE)  // Ile sekund symulacji trwa dzień pracy
 
 // === PARAMETRY SYMULACJI ===
 #define LICZBA_ZWIEDZAJACYCH 50
