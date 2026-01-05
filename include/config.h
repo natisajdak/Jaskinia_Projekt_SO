@@ -16,29 +16,30 @@
 #include <errno.h>
 
 /// Limity tras
-#define N1 10               
-#define N2 10               
+#define N1 8
+#define N2 8
 
 // Kładki
-#define K 3                 
+#define K 3
 
-// Czasy wycieczek (sekundy)
-#define T1 10               
-#define T2 15              
+// Czasy wycieczek (sekundy rzeczywiste w symulacji)
+#define T1 8
+#define T2 10
 
-// Godziny otwarcia
-#define TP 10                
-#define TK 18             
+// === GODZINY OTWARCIA JASKINI (format 24h) ===
+#define TP 10
+#define TK 18
 
 // Przyspieszenie symulacji
 // 240 = 4 minuty rzeczywiste = 1 sekunda symulacji (8h = 2 minuty)
 #define PRZYSPIESZENIE 240
-#define CZAS_OTWARCIA_SEK ((TK - TP) * 3600 / PRZYSPIESZENIE)  // Ile sekund symulacji trwa dzień pracy
+#define CZAS_OTWARCIA_SEK ((TK - TP) * 3600 / PRZYSPIESZENIE)  // Ile sekund symulacji trwa dzień pracy              
 
 // === PARAMETRY SYMULACJI ===
-#define LICZBA_ZWIEDZAJACYCH 50
+
+#define LICZBA_ZWIEDZAJACYCH 25
 #define MAX_ZWIEDZAJACYCH 100
-#define CZAS_SYMULACJI TK
+#define CZAS_SYMULACJI CZAS_OTWARCIA_SEK
 #define WIEK_DOROSLY 18             // Od tego wieku można być opiekunem
 
 // Opóźnienia (sekundy)
@@ -46,10 +47,11 @@
 #define OPOZNIENIE_ZWIEDZAJACY_MAX 3
 
 // Prawdopodobieństwa (%)
-#define SZANSA_POWROT 10
-#define SZANSA_OPIEKUN_Z_DZIECKIEM 30  // 30% dorosłych ma dziecko
+#define SZANSA_POWROT 60
+#define SZANSA_OPIEKUN_Z_DZIECKIEM 10
 
 // === CENY BILETÓW ===
+
 #define CENA_BAZOWA 30.0f
 #define ZNIZKA_POWROT 0.5f
 #define ZNIZKA_DZIECKO_Z_OPIEKUNEM 0.2f  // 20% zniżki dla dziecka z opiekunem
@@ -62,8 +64,9 @@
 #define WIEK_TYLKO_TRASA2_SENIOR 75
 
 // === KOMUNIKATY (typy w kolejce) ===
-#define MSG_BILET_POWROT 1     // Powtórka - OMIJA KOLEJKĘ
-#define MSG_BILET_ZWYKLY 2     // Normalna kolejka           
+#define MSG_BILET_POWROT 1      // Powtórka - OMIJA KOLEJKĘ
+#define MSG_BILET_ZWYKLY 2    // Normalna kolejka       
+
 
 // === SEMAFORY (indeksy w zestawie) ===
 enum {
@@ -85,12 +88,14 @@ enum {
 };
 
 // === ŚCIEŻKI DO PLIKÓW ===
+
 #define LOG_BILETY "logs/bilety.txt"
 #define LOG_TRASA1 "logs/trasa1.txt"
 #define LOG_TRASA2 "logs/trasa2.txt"
 #define LOG_SYMULACJA "logs/symulacja.log"
 
 // === KOLORY TERMINALA ===
+
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[31m"
 #define COLOR_GREEN   "\033[32m"
@@ -101,6 +106,7 @@ enum {
 #define COLOR_BOLD    "\033[1m"
 
 // === DEBUGOWANIE ===
+
 #define DEBUG_MODE 1
 
 #if DEBUG_MODE
