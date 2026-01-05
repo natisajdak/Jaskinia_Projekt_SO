@@ -117,27 +117,69 @@ void obsluga_sigint(int sig) {
     exit(0);
 }
 
+void waliduj_parametry(void) {
+    int bledy = 0;
+    
+    if (N1 <= K) {
+        log_error("BŁĄD: N1 (%d) musi być > K (%d)", N1, K);
+        bledy++;
+    }
+    if (N2 <= K) {
+        log_error("BŁĄD: N2 (%d) musi być > K (%d)", N2, K);
+        bledy++;
+    }
+    if (TP >= TK) {
+        log_error("BŁĄD: Tp (%d:00) musi być < Tk (%d:00)", TP, TK);
+        bledy++;
+    }
+    if (CZAS_OTWARCIA_SEK <= T1) {
+        log_error("BŁĄD: Czas otwarcia (%d sek) musi być > T1 (%d sek)", CZAS_OTWARCIA_SEK, T1);
+        bledy++;
+    }
+    if (CZAS_OTWARCIA_SEK <= T2) {
+        log_error("BŁĄD: Czas otwarcia (%d sek) musi być > T2 (%d sek)", CZAS_OTWARCIA_SEK, T2);
+        bledy++;
+    }
+    if (K < 1) {
+        log_error("BŁĄD: K musi być >= 1");
+        bledy++;
+    }
+    if (LICZBA_ZWIEDZAJACYCH > MAX_ZWIEDZAJACYCH) {
+        log_error("BŁĄD: LICZBA_ZWIEDZAJACYCH (%d) > MAX (%d)", 
+                 LICZBA_ZWIEDZAJACYCH, MAX_ZWIEDZAJACYCH);
+        bledy++;
+    }
+    
+    if (bledy > 0) {
+        log_error("Wykryto %d błędów w parametrach - zakończenie", bledy);
+        exit(1);
+    }
+    
+    log_success("Parametry zwalidowane: N1=%d, N2=%d, K=%d, T1=%d, T2=%d, Tp=%d:00, Tk=%d:00",
+                N1, N2, K, T1, T2, TP, TK);
+}
+
 // Inicjalizacja struktur IPC
 void inicjalizuj_ipc(void) {
     log_info("Inicjalizacja struktur IPC...");
     
-    // Pamięć dzielona
     shmid_global = utworz_pamiec_dzielona();
     stan_global = podlacz_pamiec_dzielona(shmid_global);
     
-    // Wyzeruj stan
     memset(stan_global, 0, sizeof(StanJaskini));
-    stan_global->czas_startu = time(NULL);
     stan_global->pid_main = getpid();
-    stan_global->jaskinia_otwarta = 1;  // WAŻNE!
+    stan_global->jaskinia_otwarta = 0;  // Zamknięta na start
+    // czas_startu będzie ustawiony po TP
     
+    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
+    stan_global->para_flaga[i] = 0;
+    }
+
     log_success("Pamięć dzielona zainicjalizowana");
     
-    // Semafory
     semid_global = utworz_semafory();
     inicjalizuj_semafory(semid_global);
     
-    // Kolejka komunikatów
     msgid_global = utworz_kolejke();
     
     log_success("Wszystkie struktury IPC gotowe");
@@ -194,51 +236,70 @@ int main(int argc, char *argv[]) {
     
     printf("\n");
     printf(COLOR_BOLD COLOR_CYAN);
-    printf("╔═══════════════════════════════════════════╗\n");
-    printf("║                 JASKINIA                  ║\n");
-    printf("╚═══════════════════════════════════════════╝\n");
+    printf("╔═══════════════════════════════════════╗\n");
+    printf("║                 JASKINIA              ║\n");
+    printf("╚═══════════════════════════════════════╝\n");
     printf(COLOR_RESET);
     printf("\n");
     
-    // Seed dla rand()
     srand(time(NULL));
     
-    // Rejestracja cleanup przy wyjściu
     atexit(cleanup);
     
-    // Obsługa Ctrl+C
     struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));           // Zerowanie struktury dla pewności
-    sa.sa_handler = obsluga_sigint;       // Wskazanie funkcji obsługi
-    sigemptyset(&sa.sa_mask);             // Nie blokujemy dodatkowych sygnałów podczas obsługi
-    sa.sa_flags = 0;                      // Flagi (0 oznacza brak specjalnych zachowań jak SA_RESTART)
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = obsluga_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
 
     if (sigaction(SIGINT, &sa, NULL) == -1) {
         perror("sigaction");
         exit(1);
     }
     
-    // Inicjalizacja
+    // Walidacja parametrów
+    waliduj_parametry();
+    
     inicjalizuj_ipc();
     utworz_logi();
     ustaw_env_ipc();
     
-    log_info("Symulacja wystartuje za 2 sekundy...");
-    sleep(2);
+    // WYŚWIETL INFORMACJE O CZASIE SYMULACJI
+    printf(COLOR_CYAN "\n");
+    printf("╔═══════════════════════════════════════════╗\n");
+    printf("║      PARAMETRY CZASU SYMULACJI            ║\n");
+    printf("╠═══════════════════════════════════════════╣\n");
+    printf("║ Godziny jaskini:     %02d:00 - %02d:00    ║\n", TP, TK);
+    printf("║ Czas rzeczywisty:    %d godzin            ║\n", TK - TP);
+    printf("║ Przyspieszenie:      %dx                  ║\n", PRZYSPIESZENIE);
+    printf("║ Czas symulacji:      %d sek (~%.1f min)   ║\n", 
+           CZAS_OTWARCIA_SEK, CZAS_OTWARCIA_SEK / 60.0);
+    printf("╠═══════════════════════════════════════════╣\n");
+    printf("║ 1 sekunda symulacji = %.1f min rzeczywistych║\n", 
+           PRZYSPIESZENIE / 60.0);
+    printf("╚═══════════════════════════════════════════╝\n");
+    printf(COLOR_RESET "\n");
+    
+    // OTWÓRZ JASKINIĘ (symulujemy że jest godzina Tp)
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    stan_global->jaskinia_otwarta = 1;
+    stan_global->czas_startu = time(NULL);
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    
+    log_success("JASKINIA OTWARTA! (godzina %02d:00, zamknięcie %02d:00)", TP, TK);
     
     printf("\n");
-    printf(COLOR_GREEN COLOR_BOLD "╔═══════════════════════════════════════════╗\n");
-    printf("║          SYMULACJA ROZPOCZĘTA!            ║\n");
-    printf("╚═══════════════════════════════════════════╝\n" COLOR_RESET);
+    printf(COLOR_GREEN COLOR_BOLD "╔═══════════════════════════════════════╗\n");
+    printf("║          SYMULACJA ROZPOCZĘTA!      ║\n");
+    printf("╚═══════════════════════════════════════╝\n" COLOR_RESET);
     printf("\n");
     
-    
+    // URUCHOM PROCESY
     pid_t pid_kasjer = fork();
     if (pid_kasjer < 0) {
         perror("fork kasjer");
         exit(1);
     } else if (pid_kasjer == 0) {
-        // Proces potomny
         execl("./bin/kasjer", "kasjer", NULL);
         perror("execl kasjer");
         exit(1);
@@ -286,12 +347,21 @@ int main(int argc, char *argv[]) {
     log_success("Uruchomiono strażnika (PID %d)", pid_straznik);
     sleep(2);
     
-
+    // Zwiedzający pojawiają się losowo podczas otwarcia (Tp do Tk)
     log_info("Uruchamiam %d zwiedzających...", LICZBA_ZWIEDZAJACYCH);
+    log_info("Zwiedzający będą pojawiać się losowo przez %d sekund (symulowane: %02d:00-%02d:00)", 
+             CZAS_OTWARCIA_SEK, TP, TK);
     
     for (int i = 0; i < LICZBA_ZWIEDZAJACYCH; i++) {
-        // Losowe opóźnienie przed pojawieniem się
-        sleep(losuj(OPOZNIENIE_ZWIEDZAJACY_MIN, OPOZNIENIE_ZWIEDZAJACY_MAX));
+        // Losowe opóźnienie proporcjonalne do czasu otwarcia
+        int max_opoznienie = CZAS_OTWARCIA_SEK / LICZBA_ZWIEDZAJACYCH + 2;
+        sleep(losuj(OPOZNIENIE_ZWIEDZAJACY_MIN, max_opoznienie));
+        
+        // Sprawdź czy jaskinia nadal otwarta
+        if (!stan_global->jaskinia_otwarta) {
+            log_warning("Jaskinia zamknięta - nie uruchamiam więcej zwiedzających");
+            break;
+        }
         
         pid_t pid_zwiedzajacy = fork();
         if (pid_zwiedzajacy < 0) {
@@ -308,48 +378,65 @@ int main(int argc, char *argv[]) {
     }
     
     log_success("Wszyscy zwiedzający uruchomieni");
-    
-    // MONITOROWANIE    
     log_info("Symulacja trwa (max %d sekund)...", CZAS_SYMULACJI);
     
-    // CZEKAJ NA PROCESY    
-    log_info("Czas symulacji minął - czekam na procesy...");
-    
+    // CZEKAJ NA PROCESY
     int status;
     pid_t pid;
     int zakonczonych = 0;
     
+    // Daj czas na normalne zakończenie (czekaj maksymalnie CZAS_SYMULACJI + 10s)
+    time_t start_wait = time(NULL);
+    int max_wait_time = CZAS_SYMULACJI + 10;
+    
+    while ((pid = waitpid(-1, &status, WNOHANG)) >= 0) {
+        if (pid > 0) {
+            zakonczonych++;
+            
+            if (WIFEXITED(status)) {
+                int exit_code = WEXITSTATUS(status);
+                if (exit_code == 0) {
+                    log_success("Proces %d zakończył się pomyślnie", pid);
+                } else {
+                    log_warning("Proces %d zakończył się z kodem %d", pid, exit_code);
+                }
+            } else if (WIFSIGNALED(status)) {
+                log_warning("Proces %d zakończony sygnałem %d", pid, WTERMSIG(status));
+            }
+        } else {
+            // Brak procesów do zebrania - sprawdź timeout
+            if (difftime(time(NULL), start_wait) > max_wait_time) {
+                log_warning("Timeout oczekiwania na procesy - wymuszam zakończenie");
+                break;
+            }
+            sleep(1);  // 100ms
+        }
+    }
+    
+    // Po timeout - sprawdź czy są jeszcze procesy zombie
+    log_info("Sprawdzam pozostałe procesy...");
     while ((pid = wait(&status)) > 0) {
         zakonczonych++;
-        
-        if (WIFEXITED(status)) {
-            int exit_code = WEXITSTATUS(status);
-            if (exit_code == 0) {
-                log_success("Proces %d zakończył się pomyślnie", pid);
-            } else {
-                log_warning("Proces %d zakończył się z kodem %d", pid, exit_code);
-            }
-        } else if (WIFSIGNALED(status)) {
-            log_warning("Proces %d zakończony sygnałem %d", pid, WTERMSIG(status));
-        }
+        log_info("Zebrany proces zombie: %d", pid);
     }
     
     log_info("Zakończono %d procesów potomnych", zakonczonych);
     
-    
     printf("\n");
-    printf(COLOR_YELLOW COLOR_BOLD "╔═══════════════════════════════════════════╗\n");
+    printf(COLOR_YELLOW COLOR_BOLD "╔═══════════════════════════════════════╗\n");
     printf("║        SYMULACJA ZAKOŃCZONA!              ║\n");
-    printf("╚═══════════════════════════════════════════╝\n" COLOR_RESET);
+    printf("╚═══════════════════════════════════════╝\n" COLOR_RESET);
     printf("\n");
     
     printf(COLOR_BOLD "PODSUMOWANIE:\n" COLOR_RESET);
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("──────────────────────────────────────────\n");
     printf("Sprzedane bilety:     %d\n", stan_global->bilety_sprzedane);
     printf("  └─ Trasa 1:         %d\n", stan_global->bilety_trasa1);
     printf("  └─ Trasa 2:         %d\n", stan_global->bilety_trasa2);
+    printf("  └─ Powtórki:        %d\n", stan_global->bilety_powrot);
+    printf("Odmowy (dzieci):      %d\n", stan_global->bilety_dzieci_bez_opieki);
     printf("Czas trwania:         %d sekund\n", CZAS_SYMULACJI);
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("──────────────────────────────────────────\n");
     printf("\n");
     
     printf(COLOR_GREEN "Logi zapisane w katalogu: logs/\n" COLOR_RESET);
