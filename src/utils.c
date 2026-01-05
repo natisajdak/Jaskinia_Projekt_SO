@@ -164,3 +164,4 @@ void konfiguruj_sygnaly(void) {
     signal(SIGPIPE, SIG_IGN);
 }
 
+
