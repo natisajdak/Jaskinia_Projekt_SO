@@ -9,6 +9,7 @@
 #include "config.h"
 
 // === PAMIĘĆ DZIELONA ===
+
 typedef struct {
     // Liczniki osób na trasach
     int trasa1_licznik;
@@ -52,7 +53,7 @@ typedef struct {
     // Czas startu symulacji (dla logów)
     time_t czas_startu;
     
-    // === NOWE: System czasu symulacji ===
+    // === System czasu symulacji ===
     time_t czas_rzeczywisty_start;  // Kiedy symulacja wystartowała (real time)
     int symulowany_czas_sekund;      // Ile sekund minęło w symulacji
 
@@ -61,7 +62,7 @@ typedef struct {
     int trasa1_czeka_na_grupe; // 1 = przewodnik czeka na grupę
     int trasa2_czeka_na_grupe;
 
-    // === NOWE: KOLEJKI OCZEKUJĄCYCH ===
+    // === KOLEJKI OCZEKUJĄCYCH ===
     pid_t kolejka_trasa1[MAX_ZWIEDZAJACYCH];  // MAX_ZWIEDZAJACYCH
     int kolejka_trasa1_poczatek;
     int kolejka_trasa1_koniec;
@@ -72,7 +73,7 @@ typedef struct {
     
     int para_flaga[MAX_ZWIEDZAJACYCH];  //PARA OPIEKUN+DZIECKO TYLKO NA TRASIE 2
 
-    // NOWE: Aktualne grupy w trasie (lista PID-ów)
+    // Aktualne grupy w trasie (lista PID-ów)
     pid_t grupa1_pids[N1];  // N1
     int grupa1_liczba;
     
@@ -82,6 +83,7 @@ typedef struct {
 } StanJaskini;
 
 // KOLEJKA KOMUNIKATÓW (Kasjer ↔ Zwiedzający)
+
 typedef struct {
     long mtype; 
     
@@ -106,6 +108,7 @@ typedef struct {
 } MsgBilet;
 
 // UNIA DLA SEMCTL (wymagane na niektórych systemach)
+
 union semun {
     int val;                    // Wartość dla SETVAL
     struct semid_ds *buf;       // Buffer dla IPC_STAT, IPC_SET
@@ -113,6 +116,7 @@ union semun {
 };
 
 // === FUNKCJE POMOCNICZE IPC ===
+
 // Pamięć dzielona
 int utworz_pamiec_dzielona(void);
 StanJaskini* podlacz_pamiec_dzielona(int shmid);
@@ -142,7 +146,6 @@ void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid);
 int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob);
 int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun, 
                            StanJaskini *stan, int semid);
-
 // Funkcje pomocnicze
 void wypisz_stan_jaskini(StanJaskini *stan);
 void zapisz_log_symulacji(const char *format, ...);
