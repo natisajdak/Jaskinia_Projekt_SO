@@ -358,8 +358,8 @@ koniec:
     log_info("[PRZEWODNIK %d] Zakończono prowadzenie wycieczek", numer_trasy);
     log_success("[PRZEWODNIK %d] Łącznie przeprowadzono: %d wycieczek", numer_trasy, numer_wycieczki);
    
-    // POPRAWKA: Przewodnik NIE "wyrzuca" zwiedzających
-    // Zwiedzający SAMI sprawdzą stan->jaskinia_otwarta i wyjdą
+
+
     sem_wait_safe(semid_global, SEM_MUTEX);
     int czekajacych = (numer_trasy == 1) ? 
         stan_global->kolejka_trasa1_koniec : 
@@ -380,7 +380,7 @@ koniec:
     
     int sem_gotowa = (numer_trasy == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
     
-    // Obudź zwiedzających (oni SAMI sprawdzą czy jaskinia otwarta)
+
     for (int i = 0; i < czekajacych; i++) {
         sem_signal_safe(semid_global, sem_gotowa);
     }
