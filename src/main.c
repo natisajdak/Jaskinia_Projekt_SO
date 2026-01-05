@@ -15,7 +15,7 @@ int semid_global = -1;
 int msgid_global = -1;
 StanJaskini *stan_global = NULL;
 
-// Lista PID procesów potomnych (do czekania)
+// Lista PID procesów potomnych
 pid_t pids[100];
 int liczba_procesow = 0;
 
@@ -24,10 +24,8 @@ void cleanup(void) {
     log_info("Sprzątanie zasobów...");
     
     if (stan_global) {
-        // Wypisz końcowy stan
         wypisz_stan_jaskini(stan_global);
         
-        // Zapisz podsumowanie
         zapisz_log_symulacji("=== KONIEC SYMULACJI ===");
         zapisz_log_symulacji("Bilety sprzedane: %d (Trasa1: %d, Trasa2: %d)",
                              stan_global->bilety_sprzedane,
@@ -117,6 +115,7 @@ void obsluga_sigint(int sig) {
     exit(0);
 }
 
+// Walidacja parametrów
 void waliduj_parametry(void) {
     int bledy = 0;
     
@@ -189,13 +188,11 @@ void inicjalizuj_ipc(void) {
 void utworz_logi(void) {
     system("mkdir -p logs");
     
-    // Wyczyść stare logi
     unlink(LOG_BILETY);
     unlink(LOG_TRASA1);
     unlink(LOG_TRASA2);
     unlink(LOG_SYMULACJA);
     
-    // Nagłówki
     time_t now = time(NULL);
     log_to_file(LOG_SYMULACJA, "=== START SYMULACJI JASKINIA ===");
     log_to_file(LOG_SYMULACJA, "Data: %s", ctime(&now));
@@ -209,7 +206,7 @@ void utworz_logi(void) {
     log_success("Pliki logów utworzone");
 }
 
-// Ustawia zmienne środowiskowe z ID struktur IPC
+// Ustawia zmienne środowiskowe
 void ustaw_env_ipc(void) {
     char buf[32];
     

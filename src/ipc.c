@@ -108,7 +108,7 @@ void inicjalizuj_semafory(int semid) {
     arg.val = 0;
     semctl(semid, SEM_PRZEWODNIK2_READY, SETVAL, arg);
     log_info("Semafor SEM_PRZEWODNIK2_READY = 0");
-
+    
     arg.val = 0;
     semctl(semid, SEM_GRUPA1_WEJSCIE_KLADKA, SETVAL, arg);
     semctl(semid, SEM_GRUPA2_WEJSCIE_KLADKA, SETVAL, arg);
@@ -131,14 +131,13 @@ void sem_wait_safe(int semid, int sem_num) {
     op.sem_op = -1;
     op.sem_flg = 0;
     
-    // Obsługa przerwania przez sygnał (EINTR) - ponawiaj operację
     while (semop(semid, &op, 1) < 0) {
         if (errno == EINTR) {
-            continue; 
-        } 
+            continue;
+        }
         perror("semop wait");
         log_error("Blad sem_wait na semaforze %d (errno=%d)", sem_num, errno);
-        return;  
+        return;
     }
 }
 
@@ -150,7 +149,7 @@ void sem_signal_safe(int semid, int sem_num) {
     
     while (semop(semid, &op, 1) < 0) {
         if (errno == EINTR) {
-            continue; 
+            continue;
         }
         perror("semop signal");
         log_error("Blad sem_signal na semaforze %d (errno=%d)", sem_num, errno);
@@ -200,7 +199,7 @@ void usun_kolejke(int msgid) {
     }
 }
 
-//  REJESTRACJA ZWIEDZAJĄCYCH (dla ewakuacji)
+// === REJESTRACJA ZWIEDZAJĄCYCH (dla ewakuacji) ===
 void zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
     sem_wait_safe(semid, SEM_MUTEX);
     
@@ -238,7 +237,7 @@ void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
     for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
         if (stan->zwiedzajacy_pids[i] == pid) {
             stan->zwiedzajacy_pids[i] = 0;
-            stan->liczba_aktywnych--;
+            stan->liczba_aktywnych--;  
             found = 1;
             DEBUG_PRINT("Wyrejestrowano zwiedzającego PID %d (pozostało: %d)", 
                        pid, stan->liczba_aktywnych);
@@ -271,7 +270,7 @@ int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun,
         stan->kolejka_trasa2[idx_d] = pid_dziecko;
         stan->kolejka_trasa2[idx_o] = pid_opiekun;
         
-        stan->para_flaga[idx_d] = 1;  // ← PARA!
+        stan->para_flaga[idx_d] = 1;  // PARA
         stan->para_flaga[idx_o] = 0;  // Drugi element pary
         
         log_info("[KOLEJKA T2] Para dziecko %d + opiekun %d dołączyli (pozycje %d-%d)",
@@ -288,6 +287,7 @@ int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun,
 
 //  KOLEJKOWANIE ZWIEDZAJĄCYCH 
 void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid) {
+
     sem_wait_safe(semid, SEM_MUTEX);
     
     if (trasa == 1) {
@@ -301,7 +301,7 @@ void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid) {
         if (stan->kolejka_trasa2_koniec < MAX_ZWIEDZAJACYCH) {
             int idx = stan->kolejka_trasa2_koniec++;
             stan->kolejka_trasa2[idx] = pid;
-            stan->para_flaga[idx] = 0;
+            stan->para_flaga[idx] = 0;  // Pojedyncza osoba
             log_info("[KOLEJKA T2] Zwiedzający PID %d dołączył (pozycja %d)", pid, idx + 1);
         }
     }
@@ -367,6 +367,8 @@ int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob) {
     return zebrano;
 }
 
+// === WYŚWIETLANIE STANU ===
+
 void wypisz_stan_jaskini(StanJaskini *stan) {
     printf("\n");
     printf(COLOR_BOLD "╔═══════════════════════════════════════╗\n" COLOR_RESET);
@@ -391,7 +393,6 @@ void wypisz_stan_jaskini(StanJaskini *stan) {
     printf("\n");
 }
 
-
 void zapisz_log_symulacji(const char *format, ...) {
     char message[512];
     va_list args;
@@ -401,4 +402,3 @@ void zapisz_log_symulacji(const char *format, ...) {
     
     log_to_file(LOG_SYMULACJA, "%s", message);
 }
-

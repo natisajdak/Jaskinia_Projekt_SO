@@ -30,21 +30,19 @@ typedef struct {
     int trasa;
     int czy_powrot;
     
-    int jest_opiekunem;      // 1 jeśli ta osoba jest opiekunem
-    int jest_dzieckiem;      // 1 jeśli ta osoba jest dzieckiem
-    pid_t pid_opiekuna;      // PID opiekuna (jeśli dziecko)
-    pid_t pid_dziecka;       // PID dziecka (jeśli opiekun)
-
+    int jest_opiekunem;
+    int jest_dzieckiem;
+    pid_t pid_opiekuna;
+    pid_t pid_dziecka;
 } Zwiedzajacy;
 
 int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     MsgBilet prosba;
     
-    // Wybierz priorytet w kolejce
     if (zw->czy_powrot) {
-        prosba.mtype = MSG_BILET_POWROT;  // 1 - najwyższy priorytet     
+        prosba.mtype = MSG_BILET_POWROT;
     } else {
-        prosba.mtype = MSG_BILET_ZWYKLY;  // 2 - normalna kolejka
+        prosba.mtype = MSG_BILET_ZWYKLY;
     }
     
     prosba.zwiedzajacy_pid = moj_pid;
@@ -61,13 +59,11 @@ int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     log_info("[ZWIEDZAJĄCY %d] Proszę o bilet (trasa %d, kolejka: %s)...", 
              moj_pid, zw->trasa, typ_kolejki);
     
-    // Wyślij prośbę
     if (msgsnd(msgid, &prosba, sizeof(MsgBilet) - sizeof(long), 0) < 0) {
         perror("msgsnd");
         return 0;
     }
     
-    // Czekaj na odpowiedź
     MsgBilet odpowiedz;
     int otrzymano = 0;
     time_t start_wait = time(NULL);

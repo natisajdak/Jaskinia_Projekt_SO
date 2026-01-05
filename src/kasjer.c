@@ -107,7 +107,7 @@ const char* okresl_typ_biletu(MsgBilet *prosba) {
         return "POWTÓRKA";
     }
     
-    if (prosba->wiek < WIEK_GRATIS) {  // <3 lat
+    if (prosba->wiek < WIEK_GRATIS) {           // <3 lat
         return "DZIECKO_GRATIS";
     }
     
