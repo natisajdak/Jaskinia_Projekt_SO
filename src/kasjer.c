@@ -265,6 +265,13 @@ int main(int argc, char *argv[]) {
     }
     
     log_success("[KASJER] Uruchomiono %d wątków obsługi", NUM_WATKOW);
+
+  /* Symulacja awarii 
+    if (getpid() % 2 == 0) { // Tylko dla połowy uruchomień
+    log_warning("[KASJER] SYMULACJA AWARII - ZABIJAM SIĘ!");
+    sleep(2); // Daj chwilę na start
+    kill(getpid(), SIGKILL); // 
+}*/
     
     // Czekaj na wątki
     for (int i = 0; i < NUM_WATKOW; i++) {
@@ -277,11 +284,12 @@ int main(int argc, char *argv[]) {
     
     // === PODSUMOWANIE KASJERA ===
     printf("\n");
-
+    sem_wait_safe(semid, SEM_MUTEX);  
+    printf("\n" COLOR_BOLD COLOR_BLUE);  
     printf("╔═══════════════════════════════════════════╗\n");
     printf("║       PODSUMOWANIE KASJERA                ║\n");
     printf("╚═══════════════════════════════════════════╝\n");
-    
+    sem_signal_safe(semid, SEM_MUTEX);
     sem_wait_safe(semid, SEM_MUTEX);
     printf("Bilety sprzedane:           %d\n", stan->bilety_sprzedane);
     printf("  - Trasa 1:                %d\n", stan->bilety_trasa1);

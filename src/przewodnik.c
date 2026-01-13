@@ -389,18 +389,18 @@ koniec:
         log_info("[PRZEWODNIK %d] Poinformowano %d zwiedzających o zamknięciu", numer_trasy, czekajacych);
     }
    
-    printf("\n");
-    printf("╔═══════════════════════════════════════╗\n");
-    printf("║   PODSUMOWANIE PRZEWODNIKA TRASY %d   ║\n", numer_trasy);
-    printf("╚═══════════════════════════════════════╝\n");
     sem_wait_safe(semid, SEM_MUTEX);
+    printf("\n" COLOR_BOLD COLOR_GREEN);
+    printf("╔═══════════════════════════════════════╗\n");
+    printf("║   PODSUMOWANIE PRZEWODNIKA TRASY %d    ║\n", numer_trasy);
+    printf("╚═══════════════════════════════════════╝\n");
     printf("Przeprowadzono wycieczek: %d\n", numer_wycieczki);
     printf("Czas trasy:               %d sekund\n", czas_trasy);
     printf("Max osób na trasie:       %d\n", (numer_trasy == 1 ? N1 : N2));
     printf("Max osób na kładce:       %d\n", K);
+    printf(COLOR_RESET "\n");
     sem_signal_safe(semid, SEM_MUTEX);
-    printf("\n");
-   
+       
     odlacz_pamiec_dzielona(stan_global);
    
     return 0;

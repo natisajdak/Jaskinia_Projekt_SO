@@ -370,16 +370,16 @@ int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob) {
 // === WYŚWIETLANIE STANU ===
 
 void wypisz_stan_jaskini(StanJaskini *stan) {
-    printf("\n");
-    printf(COLOR_BOLD "╔═══════════════════════════════════════╗\n" COLOR_RESET);
-    printf(COLOR_BOLD "║      STAN JASKINI                     ║\n" COLOR_RESET);
-    printf(COLOR_BOLD "╠═══════════════════════════════════════╣\n" COLOR_RESET);
-    printf("║ Trasa 1: %2d/%2d osób                  ║\n", stan->trasa1_licznik, N1);
-    printf("║ Trasa 2: %2d/%2d osób                  ║\n", stan->trasa2_licznik, N2);
-    printf("║ Kładka 1: %2d/%2d (kier: %s)        ║\n", 
+    printf("\n" COLOR_BOLD COLOR_CYAN);
+    printf(COLOR_BOLD "╔═══════════════════════════════════════╗\n" COLOR_CYAN);
+    printf(COLOR_BOLD "║      STAN JASKINI                     ║\n" COLOR_CYAN);
+    printf(COLOR_BOLD "╠═══════════════════════════════════════╣\n" COLOR_CYAN);
+    printf("║ Trasa 1: %2d/%2d osób                   ║\n", stan->trasa1_licznik, N1);
+    printf("║ Trasa 2: %2d/%2d osób                   ║\n", stan->trasa2_licznik, N2);
+    printf("║ Kładka 1: %2d/%2d (kier: %s)       ║\n", 
            stan->kladka1_licznik, K, 
            stan->kladka1_kierunek == 0 ? "WEJŚCIE" : "WYJŚCIE");
-    printf("║ Kładka 2: %2d/%2d (kier: %s)        ║\n",
+    printf("║ Kładka 2: %2d/%2d (kier: %s)       ║\n",
            stan->kladka2_licznik, K,
            stan->kladka2_kierunek == 0 ? "WEJŚCIE" : "WYJŚCIE");
     printf("╠═══════════════════════════════════════╣\n");
@@ -389,7 +389,7 @@ void wypisz_stan_jaskini(StanJaskini *stan) {
     printf("║ W kolejkach:                          ║\n");
     printf("║   - Trasa 1: %3d osób                 ║\n", stan->kolejka_trasa1_koniec);
     printf("║   - Trasa 2: %3d osób                 ║\n", stan->kolejka_trasa2_koniec);
-    printf(COLOR_BOLD "╚═══════════════════════════════════════╝\n" COLOR_RESET);
+    printf(COLOR_BOLD "╚═══════════════════════════════════════╝\n" COLOR_CYAN);
     printf("\n");
 }
 
