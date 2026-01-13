@@ -5,6 +5,7 @@
 #include <time.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <string.h>
 #include "../include/config.h"
 #include "../include/ipc.h"
 #include "../include/utils.h"
@@ -55,7 +56,6 @@ void obsluga_sigint(int sig) {
     (void)sig;
     printf("\n");
     log_warning("╔═══════════════════════════════════════╗");
-    log_warning("║    OTRZYMANO SIGINT (Ctrl+C)          ║");
     log_warning("║    AWARYJNE ZAMYKANIE JASKINI...      ║");
     log_warning("╚═══════════════════════════════════════╝");
 
@@ -245,36 +245,36 @@ int main(int argc, char *argv[]) {
     
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = obsluga_sigint;
+    sa.sa_handler = obsluga_sigint; //ten sam handler
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
     if (sigaction(SIGINT, &sa, NULL) == -1) {
-        perror("sigaction");
+        perror("sigaction INT");
         exit(1);
     }
-    
-    // Walidacja parametrów
+
+    if (sigaction(SIGTERM, &sa, NULL) == -1) { perror("sigaction TERM"); exit(1); }
+
     waliduj_parametry();
-    
     inicjalizuj_ipc();
     utworz_logi();
     ustaw_env_ipc();
     
     // WYŚWIETL INFORMACJE O CZASIE SYMULACJI
     printf(COLOR_CYAN "\n");
-    printf("╔═══════════════════════════════════════════╗\n");
-    printf("║      PARAMETRY CZASU SYMULACJI            ║\n");
-    printf("╠═══════════════════════════════════════════╣\n");
-    printf("║ Godziny jaskini:     %02d:00 - %02d:00    ║\n", TP, TK);
-    printf("║ Czas rzeczywisty:    %d godzin            ║\n", TK - TP);
+    printf("╔════════════════════════════════════════════╗\n");
+    printf("║      PARAMETRY CZASU SYMULACJI             ║\n");
+    printf("╠════════════════════════════════════════════╣\n");
+    printf("║ Godziny jaskini:     %02d:00 - %02d:00         ║\n", TP, TK);
+    printf("║ Czas rzeczywisty:    %d godzin             ║\n", TK - TP);
     printf("║ Przyspieszenie:      %dx                  ║\n", PRZYSPIESZENIE);
-    printf("║ Czas symulacji:      %d sek (~%.1f min)   ║\n", 
+    printf("║ Czas symulacji:      %d sek (~%.1f min)    ║\n", 
            CZAS_OTWARCIA_SEK, CZAS_OTWARCIA_SEK / 60.0);
-    printf("╠═══════════════════════════════════════════╣\n");
+    printf("╠════════════════════════════════════════════╣\n");
     printf("║ 1 sekunda symulacji = %.1f min rzeczywistych║\n", 
            PRZYSPIESZENIE / 60.0);
-    printf("╚═══════════════════════════════════════════╝\n");
+    printf("╚════════════════════════════════════════════╝\n");
     printf(COLOR_RESET "\n");
     
     // OTWÓRZ JASKINIĘ (symulujemy że jest godzina Tp)
@@ -287,7 +287,7 @@ int main(int argc, char *argv[]) {
     
     printf("\n");
     printf(COLOR_GREEN COLOR_BOLD "╔═══════════════════════════════════════╗\n");
-    printf("║          SYMULACJA ROZPOCZĘTA!      ║\n");
+    printf("║          SYMULACJA ROZPOCZĘTA!        ║\n");
     printf("╚═══════════════════════════════════════╝\n" COLOR_RESET);
     printf("\n");
     
@@ -421,7 +421,7 @@ int main(int argc, char *argv[]) {
     
     printf("\n");
     printf(COLOR_YELLOW COLOR_BOLD "╔═══════════════════════════════════════╗\n");
-    printf("║        SYMULACJA ZAKOŃCZONA!              ║\n");
+    printf("║        SYMULACJA ZAKOŃCZONA!          ║\n");
     printf("╚═══════════════════════════════════════╝\n" COLOR_RESET);
     printf("\n");
     
