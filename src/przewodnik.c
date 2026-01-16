@@ -20,14 +20,8 @@ volatile sig_atomic_t flaga_zamkniecie = 0;
 volatile sig_atomic_t w_trakcie_wycieczki = 0;
 
 void obsluga_zamkniecia(int sig) {
-    if (sig == SIGUSR1 || sig == SIGUSR2) {
-        flaga_zamkniecie = 1;
-        if (w_trakcie_wycieczki) {
-            log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia PODCZAS wycieczki - dokończymy normalnie!", numer_trasy);
-        } else {
-            log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia PRZED wyjściem - wycieczka ANULOWANA!", numer_trasy);
-        }
-    }
+    (void)sig;
+    flaga_zamkniecie = 1;
 }
 
 void wpusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
@@ -188,7 +182,6 @@ void wypusc_przez_kladke(pid_t *grupa_pids, int liczba_osob) {
 }
 
 int main(int argc, char *argv[]) {
-    int semid = atoi(getenv("SEMID"));
 
     if (argc < 2) {
         fprintf(stderr, "Użycie: %s <numer_trasy>\n", argv[0]);
@@ -221,6 +214,14 @@ int main(int argc, char *argv[]) {
        
         // Blokuj się i czekaj, aż ktoś faktycznie pojawi się w kolejce
         sem_wait_safe(semid_global, sem_kolejka);
+
+        if (flaga_zamkniecie) {
+            if (w_trakcie_wycieczki) {
+            log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia PODCZAS wycieczki - dokończymy normalnie!", numer_trasy);
+        } else {
+            log_warning("[PRZEWODNIK %d] Otrzymano sygnał zamknięcia PRZED wyjściem - wycieczka ANULOWANA!", numer_trasy);
+            }
+        }
        
         // Sprawdzenie po obudzeniu, czy jaskinia nie została zamknięta
         if (flaga_zamkniecie || !stan_global->jaskinia_otwarta) break;
@@ -358,8 +359,6 @@ koniec:
     log_info("[PRZEWODNIK %d] Zakończono prowadzenie wycieczek", numer_trasy);
     log_success("[PRZEWODNIK %d] Łącznie przeprowadzono: %d wycieczek", numer_trasy, numer_wycieczki);
    
-
-
     sem_wait_safe(semid_global, SEM_MUTEX);
     int czekajacych = (numer_trasy == 1) ? 
         stan_global->kolejka_trasa1_koniec : 
@@ -389,17 +388,31 @@ koniec:
         log_info("[PRZEWODNIK %d] Poinformowano %d zwiedzających o zamknięciu", numer_trasy, czekajacych);
     }
    
-    sem_wait_safe(semid, SEM_MUTEX);
-    printf("\n" COLOR_BOLD COLOR_GREEN);
-    printf("╔═══════════════════════════════════════╗\n");
-    printf("║   PODSUMOWANIE PRZEWODNIKA TRASY %d    ║\n", numer_trasy);
-    printf("╚═══════════════════════════════════════╝\n");
-    printf("Przeprowadzono wycieczek: %d\n", numer_wycieczki);
-    printf("Czas trasy:               %d sekund\n", czas_trasy);
-    printf("Max osób na trasie:       %d\n", (numer_trasy == 1 ? N1 : N2));
-    printf("Max osób na kładce:       %d\n", K);
-    printf(COLOR_RESET "\n");
-    sem_signal_safe(semid, SEM_MUTEX);
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    
+    // Zbuduj cały tekst w buforze
+    char podsumowanie[2048];
+    snprintf(podsumowanie, sizeof(podsumowanie),
+        "\n" COLOR_BOLD COLOR_GREEN
+        "╔═══════════════════════════════════════╗\n"
+        "║   PODSUMOWANIE PRZEWODNIKA TRASY %d    ║\n"
+        "╚═══════════════════════════════════════╝\n"
+        COLOR_RESET
+        "Przeprowadzono wycieczek: %d\n"
+        "Czas trasy:               %d sekund\n"
+        "Max osób na trasie:       %d\n"
+        "Max osób na kładce:       %d\n\n",
+        numer_trasy,
+        numer_wycieczki,
+        czas_trasy,
+        (numer_trasy == 1 ? N1 : N2),
+        K
+    );
+    
+    printf("%s", podsumowanie);
+    fflush(stdout);
+    
+    sem_signal_safe(semid_global, SEM_MUTEX);
        
     odlacz_pamiec_dzielona(stan_global);
    
