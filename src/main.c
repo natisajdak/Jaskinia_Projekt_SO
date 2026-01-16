@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <string.h>
+#include <errno.h>
 #include "../include/config.h"
 #include "../include/ipc.h"
 #include "../include/utils.h"
@@ -16,8 +17,10 @@ int semid_global = -1;
 int msgid_global = -1;
 StanJaskini *stan_global = NULL;
 
+volatile sig_atomic_t zamkniecie = 0;
+
 // Lista PID procesów potomnych
-pid_t pids[100];
+pid_t pids[MAX_ZWIEDZAJACYCH + 10];
 int liczba_procesow = 0;
 
 // Funkcja sprzątająca
@@ -26,15 +29,38 @@ void cleanup(void) {
     
     if (stan_global) {
         wypisz_stan_jaskini(stan_global);
-        
         zapisz_log_symulacji("=== KONIEC SYMULACJI ===");
         zapisz_log_symulacji("Bilety sprzedane: %d (Trasa1: %d, Trasa2: %d)",
                              stan_global->bilety_sprzedane,
                              stan_global->bilety_trasa1,
                              stan_global->bilety_trasa2);
-        
         odlacz_pamiec_dzielona(stan_global);
     }
+    
+    log_info("Czekam na zakończenie wszystkich procesów potomnych...");
+    int status;
+    pid_t pid;
+    int zebranych = 0;
+    
+    // BLOCKING wait - czekaj na każdy proces
+    while (1) {
+        pid = wait(&status); 
+        
+        if (pid > 0) {
+            zebranych++;
+            DEBUG_PRINT("Zebrany proces %d", pid);
+        } else if (pid == -1) {
+            if (errno == ECHILD) {
+                log_success("Wszystkie procesy potomne zakończone");
+                break;
+            } else {
+                perror("wait");
+                break;
+            }
+        }
+    }
+    
+    log_info("Zebrano %d procesów", zebranych);
     
     if (shmid_global >= 0) {
         usun_pamiec_dzielona(shmid_global);
@@ -54,6 +80,10 @@ void cleanup(void) {
 // Obsługa Ctrl+C
 void obsluga_sigint(int sig) {
     (void)sig;
+    zamkniecie = 1;
+}
+
+void awaryjne_zamkniecie(void) {
     printf("\n");
     log_warning("╔═══════════════════════════════════════╗");
     log_warning("║    AWARYJNE ZAMYKANIE JASKINI...      ║");
@@ -68,36 +98,42 @@ void obsluga_sigint(int sig) {
         
         log_warning("→ Jaskinia oznaczona jako ZAMKNIĘTA");
         
-        // Wyślij sygnały do przewodników
         if (stan_global->pid_przewodnik1 > 0) {
             log_info("→ Wysyłam SIGUSR1 do przewodnika 1 (PID %d)", stan_global->pid_przewodnik1);
-            kill(stan_global->pid_przewodnik1, SIGUSR1);
+            if (kill(stan_global->pid_przewodnik1, SIGUSR1) == -1) {
+                perror("kill przewodnik1");
+            }
         }
         
         if (stan_global->pid_przewodnik2 > 0) {
             log_info("→ Wysyłam SIGUSR2 do przewodnika 2 (PID %d)", stan_global->pid_przewodnik2);
-            kill(stan_global->pid_przewodnik2, SIGUSR2);
+            if (kill(stan_global->pid_przewodnik2, SIGUSR2) == -1) {
+                perror("kill przewodnik2");
+            }
         }
         
-        // Ewakuuj zwiedzających
         log_warning("→ Ewakuacja aktywnych zwiedzających...");
         
         int ewakuowani = 0;
         for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
             if (stan_global->zwiedzajacy_pids[i] > 0) {
-                kill(stan_global->zwiedzajacy_pids[i], SIGTERM);
-                ewakuowani++;
+                if (kill(stan_global->zwiedzajacy_pids[i], SIGTERM) == -1) {
+                    perror("kill zwiedzajacy");
+                } else {
+                    ewakuowani++;
+                }
             }
         }
         
         log_success("→ Wysłano sygnały ewakuacji do %d zwiedzających", ewakuowani);
     }
 
-    // Zakończ wszystkie procesy potomne
     log_info("→ Zakańczam procesy potomne...");
     for (int i = 0; i < liczba_procesow; i++) {
         if (pids[i] > 0) {
-            kill(pids[i], SIGTERM);
+            if (kill(pids[i], SIGTERM) == -1 && errno != ESRCH) {
+                perror("kill TERM");
+            }
         }
     }
     
@@ -106,13 +142,28 @@ void obsluga_sigint(int sig) {
     log_warning("→ Wymuszam zakończenie pozostałych procesów...");
     for (int i = 0; i < liczba_procesow; i++) {
         if (pids[i] > 0) {
-            kill(pids[i], SIGKILL);
+            if (kill(pids[i], SIGKILL) == -1 && errno != ESRCH) {
+                perror("kill KILL");
+            }
         }
     }
     
-    log_success("AWARYJNE ZAMKNIĘCIE ZAKOŃCZONE");
+    sleep(1);
+    log_info("→ Zbieram procesy zombie...");
+    int status;
+    pid_t pid;
+    int zebranych = 0;
     
-    exit(0);
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        zebranych++;
+        DEBUG_PRINT("Zebrany proces %d", pid);
+    }
+    
+    if (zebranych > 0) {
+        log_info("→ Zebrano %d procesów", zebranych);
+    }
+    
+    log_success("AWARYJNE ZAMKNIĘCIE ZAKOŃCZONE");
 }
 
 // Walidacja parametrów
@@ -267,7 +318,7 @@ int main(int argc, char *argv[]) {
     printf("║      PARAMETRY CZASU SYMULACJI             ║\n");
     printf("╠════════════════════════════════════════════╣\n");
     printf("║ Godziny jaskini:     %02d:00 - %02d:00         ║\n", TP, TK);
-    printf("║ Czas rzeczywisty:    %d godzin             ║\n", TK - TP);
+    printf("║ Czas rzeczywisty:    %d godzin              ║\n", TK - TP);
     printf("║ Przyspieszenie:      %dx                  ║\n", PRZYSPIESZENIE);
     printf("║ Czas symulacji:      %d sek (~%.1f min)    ║\n", 
            CZAS_OTWARCIA_SEK, CZAS_OTWARCIA_SEK / 60.0);
@@ -355,10 +406,19 @@ int main(int argc, char *argv[]) {
         sleep(losuj(OPOZNIENIE_ZWIEDZAJACY_MIN, max_opoznienie));
         
         // Sprawdź czy jaskinia nadal otwarta
-        if (!stan_global->jaskinia_otwarta) {
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        int otwarta = stan_global->jaskinia_otwarta;
+        sem_signal_safe(semid_global, SEM_MUTEX);
+
+        if (!otwarta) {
             log_warning("Jaskinia zamknięta - nie uruchamiam więcej zwiedzających");
             break;
         }
+
+        if (zamkniecie) {
+        log_warning("Przerwanie przez użytkownika - nie uruchamiam więcej zwiedzających");
+        break;
+    }
         
         pid_t pid_zwiedzajacy = fork();
         if (pid_zwiedzajacy < 0) {
@@ -386,7 +446,15 @@ int main(int argc, char *argv[]) {
     time_t start_wait = time(NULL);
     int max_wait_time = CZAS_SYMULACJI + 10;
     
-    while ((pid = waitpid(-1, &status, WNOHANG)) >= 0) {
+    while (1) {
+        if (zamkniecie) {
+            log_warning("Przerwanie przez użytkownika - kończę czekanie");
+            awaryjne_zamkniecie();
+            break;
+        }
+        
+        pid = waitpid(-1, &status, WNOHANG);
+        
         if (pid > 0) {
             zakonczonych++;
             
@@ -400,13 +468,31 @@ int main(int argc, char *argv[]) {
             } else if (WIFSIGNALED(status)) {
                 log_warning("Proces %d zakończony sygnałem %d", pid, WTERMSIG(status));
             }
-        } else {
+        } else if (pid == 0) {
             // Brak procesów do zebrania - sprawdź timeout
             if (difftime(time(NULL), start_wait) > max_wait_time) {
                 log_warning("Timeout oczekiwania na procesy - wymuszam zakończenie");
+                
+                // Zabij pozostałe procesy przy timeout
+                for (int i = 0; i < liczba_procesow; i++) {
+                    if (pids[i] > 0) {
+                        if (kill(pids[i], SIGKILL) == -1 && errno != ESRCH) {
+                            perror("kill SIGKILL");
+                        }
+                    }
+                }
+                sleep(1);
                 break;
             }
-            sleep(1);  // 100ms
+            usleep(100000); 
+        } else {
+            if (errno == ECHILD) {
+                log_success("Brak procesów potomnych - wszystkie zakończone");
+                break;
+            } else {
+                perror("waitpid");
+                break;
+            }
         }
     }
     
