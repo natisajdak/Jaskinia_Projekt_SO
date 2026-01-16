@@ -237,13 +237,23 @@ void inicjalizuj_ipc(void) {
 
 // Stwórz pliki logów
 void utworz_logi(void) {
-    system("mkdir -p logs");
-    
-    unlink(LOG_BILETY);
-    unlink(LOG_TRASA1);
-    unlink(LOG_TRASA2);
-    unlink(LOG_SYMULACJA);
-    
+    if (system("mkdir -p logs") != 0) {
+        perror("system mkdir");
+        log_warning("Nie można utworzyć katalogu logs/ - może już istnieje");
+    }
+    if (unlink(LOG_BILETY) == -1 && errno != ENOENT) {
+        perror("unlink bilety");
+    }
+    if (unlink(LOG_TRASA1) == -1 && errno != ENOENT) {
+        perror("unlink trasa1");
+    }
+    if (unlink(LOG_TRASA2) == -1 && errno != ENOENT) {
+        perror("unlink trasa2");
+    }
+    if (unlink(LOG_SYMULACJA) == -1 && errno != ENOENT) {
+        perror("unlink symulacja");
+    }
+        
     time_t now = time(NULL);
     log_to_file(LOG_SYMULACJA, "=== START SYMULACJI JASKINIA ===");
     log_to_file(LOG_SYMULACJA, "Data: %s", ctime(&now));
@@ -256,24 +266,32 @@ void utworz_logi(void) {
     
     log_success("Pliki logów utworzone");
 }
-
 // Ustawia zmienne środowiskowe
 void ustaw_env_ipc(void) {
     char buf[32];
     
     snprintf(buf, sizeof(buf), "%d", shmid_global);
-    setenv("SHMID", buf, 1);
+    if (setenv("SHMID", buf, 1) == -1) {
+        perror("setenv SHMID");
+        exit(1);
+    }
     
     snprintf(buf, sizeof(buf), "%d", semid_global);
-    setenv("SEMID", buf, 1);
+    if (setenv("SEMID", buf, 1) == -1) {
+        perror("setenv SEMID");
+        exit(1);
+    }
     
     snprintf(buf, sizeof(buf), "%d", msgid_global);
-    setenv("MSGID", buf, 1);
+    if (setenv("MSGID", buf, 1) == -1) {
+        perror("setenv MSGID");
+        exit(1);
+    }
 }
 
 // Dodaj PID do listy
 void dodaj_pid(pid_t pid) {
-    if (liczba_procesow < 100) {
+    if (liczba_procesow < (MAX_ZWIEDZAJACYCH + 10)) {
         pids[liczba_procesow++] = pid;
     }
 }
