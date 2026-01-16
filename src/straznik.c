@@ -79,7 +79,7 @@ void czekaj_na_zakonczenie_wycieczek() {
         if (trasa1_osoby == 0 && trasa2_osoby == 0 && !g1_aktywna && !g2_aktywna) {
             log_success("[STRAŻNIK] Wszystkie wycieczki zakończone, jaskinia pusta!");
             log_success("[STRAŻNIK] Godzina zamknięcia: %02d:00 (symulowane)", TK); 
-            break;
+            return;
         }
         
         if (timeout % 5 == 0) {
@@ -109,14 +109,36 @@ void czekaj_na_zakonczenie_wycieczek() {
     sem_signal_safe(semid, SEM_MUTEX);
 
     if (ewakuowani > 0) {
-        log_warning("[STRAŻNIK] Ewakuowano %d zwiedzających", ewakuowani);
-        sleep(2);  // Daj czas na reakcję
+    log_warning("[STRAŻNIK] Ewakuowano %d zwiedzających", ewakuowani);
+    sleep(2);  // Daj czas na reakcję
+    
+    // === WYCZYŚĆ LICZNIKI (na wypadek gdyby nie zmniejszyli) ===
+    sem_wait_safe(semid, SEM_MUTEX);
+    
+    int zostalo_t1 = stan->trasa1_licznik;
+    int zostalo_t2 = stan->trasa2_licznik;
+    int zostalo_k1 = stan->kladka1_licznik;
+    int zostalo_k2 = stan->kladka2_licznik;
+    
+    stan->trasa1_licznik = 0;
+    stan->trasa2_licznik = 0;
+    stan->kladka1_licznik = 0;
+    stan->kladka2_licznik = 0;
+    stan->grupa1_aktywna = 0;
+    stan->grupa2_aktywna = 0;
+    
+    sem_signal_safe(semid, SEM_MUTEX);
+    
+    if (zostalo_t1 > 0 || zostalo_t2 > 0 || zostalo_k1 > 0 || zostalo_k2 > 0) {
+        log_info("[STRAŻNIK] Wyzerowano liczniki (T1: %d→0, T2: %d→0, K1: %d→0, K2: %d→0)", 
+                 zostalo_t1, zostalo_t2, zostalo_k1, zostalo_k2);
     }
+}
 }
 
 void monitoruj_jaskinie() { 
-    int czas_do_zamkniecia = CZAS_OTWARCIA_SEK - 10;
-    if (czas_do_zamkniecia < 5) czas_do_zamkniecia = 5;
+    int czas_do_zamkniecia = CZAS_OTWARCIA_SEK - 2;
+    if (czas_do_zamkniecia < 2) czas_do_zamkniecia = 2;
 
     log_info("[STRAŻNIK] Wyślę sygnały zamknięcia za ok. %d sekund", czas_do_zamkniecia);
     log_info("[STRAŻNIK] Jaskinia otwarta: %02d:00, zamknie się: %02d:00 (symulowane)", TP, TK);
@@ -124,21 +146,12 @@ void monitoruj_jaskinie() {
     sem_wait_safe(semid, SEM_MUTEX);
     time_t start = stan->czas_startu;
     sem_signal_safe(semid, SEM_MUTEX);
+    
     while (czas_od_startu(start) < czas_do_zamkniecia && stan->jaskinia_otwarta) {
-        sleep(5);
-        sem_wait_safe(semid, SEM_MUTEX);
-        
-        // Oblicz symulowaną godzinę
-        int czas_od_otwarcia = czas_od_startu(start);
-        int sekund_w_symulacji = czas_od_otwarcia * PRZYSPIESZENIE;
-        int godzina_symulowana = TP + (sekund_w_symulacji / 3600);
-        int minuta_symulowana = (sekund_w_symulacji % 3600) / 60;
-
-        log_info("[STRAŻNIK] Symulowana godzina: %02d:%02d", 
-        godzina_symulowana, minuta_symulowana);
-        
-        sem_signal_safe(semid, SEM_MUTEX);
+        usleep(10000);
     }
+
+    log_info("[STRAŻNIK] Czas zamknięcia - inicjuję procedurę");
 }
 
 int main() {
