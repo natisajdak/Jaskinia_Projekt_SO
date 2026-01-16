@@ -34,8 +34,19 @@ void log_to_file(const char *filename, const char *format, ...) {
     char line[600];
     snprintf(line, sizeof(line), "[%s] %s\n", timestamp, message);
     
-    write(fd, line, strlen(line));
-    close(fd);
+    size_t len = strlen(line);
+    ssize_t written = write(fd, line, len);
+    
+    if (written < 0) {
+        perror("write log");
+    } else if ((size_t)written < len) {
+        fprintf(stderr, "Częściowy zapis do %s: %zd/%zu bajtów\n", 
+                filename, written, len);
+    }
+    
+    if (close(fd) == -1) {
+        perror("close log file");
+    }
 }
 
 void log_info(const char *format, ...) {
