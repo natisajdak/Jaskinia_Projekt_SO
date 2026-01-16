@@ -135,6 +135,10 @@ void sem_wait_safe(int semid, int sem_num) {
         if (errno == EINTR) {
             continue;
         }
+        if (errno == EIDRM || errno == EINVAL) {
+            DEBUG_PRINT("Semafory usunięte - kończę operację na sem %d", sem_num);
+            exit(0);
+        }
         perror("semop wait");
         log_error("Blad sem_wait na semaforze %d (errno=%d)", sem_num, errno);
         return;
@@ -150,6 +154,10 @@ void sem_signal_safe(int semid, int sem_num) {
     while (semop(semid, &op, 1) < 0) {
         if (errno == EINTR) {
             continue;
+        }
+        if (errno == EIDRM || errno == EINVAL) {
+            DEBUG_PRINT("Semafory usunięte - kończę operację na sem %d", sem_num);
+            exit(0);
         }
         perror("semop signal");
         log_error("Blad sem_signal na semaforze %d (errno=%d)", sem_num, errno);
@@ -255,7 +263,7 @@ void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
 // === ATOMOWE DODAWANIE PARY OPIEKUN-DZIECKO ===
 int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun, 
                            StanJaskini *stan, int semid) {
-    // Pary ZAWSZE trasa 2!
+    // Pary zawsze trasa 2
      if (trasa != 2) {
         log_error("BŁĄD: Opiekun z dzieckiem może tylko trasą 2!");
         return 0;
@@ -326,7 +334,7 @@ int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob) {
     int idx = 0;
     
     while (idx < *koniec && zebrano < max_osob) {
-        // Sprawdzaj flagę TYLKO dla trasy 2!
+        // Sprawdzaj flagę tylko dla trasy 2!
         if (nr_trasy == 2 && stan->para_flaga[idx] == 1) {
             // Para - weź oboje albo żadnego
             if (zebrano + 2 <= max_osob) {
