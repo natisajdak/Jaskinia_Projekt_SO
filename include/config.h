@@ -32,23 +32,20 @@
 
 // Przyspieszenie symulacji
 // 240 = 4 minuty rzeczywiste = 1 sekunda symulacji (8h = 2 minuty)
-#define PRZYSPIESZENIE 240
+#define PRZYSPIESZENIE 960
 #define CZAS_OTWARCIA_SEK ((TK - TP) * 3600 / PRZYSPIESZENIE)  // Ile sekund symulacji trwa dzień pracy              
 
 // === PARAMETRY SYMULACJI ===
-
-#define LICZBA_ZWIEDZAJACYCH 25
-#define MAX_ZWIEDZAJACYCH 100
 #define CZAS_SYMULACJI CZAS_OTWARCIA_SEK
 #define WIEK_DOROSLY 18             // Od tego wieku można być opiekunem
 
 // Opóźnienia (sekundy)
-#define OPOZNIENIE_ZWIEDZAJACY_MIN 1
-#define OPOZNIENIE_ZWIEDZAJACY_MAX 3
+#define GENERATOR_MIN_DELAY 1
+#define GENERATOR_MAX_DELAY 2
 
 // Prawdopodobieństwa (%)
-#define SZANSA_POWROT 60
-#define SZANSA_OPIEKUN_Z_DZIECKIEM 10
+#define SZANSA_POWROT 10
+#define SZANSA_OPIEKUN_Z_DZIECKIEM 30
 
 // === CENY BILETÓW ===
 
