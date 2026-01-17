@@ -123,7 +123,7 @@ union semun {
 };
 
 // === FUNKCJE POMOCNICZE IPC ===
-
+extern volatile sig_atomic_t flaga_stop_ipc;
 // Pamięć dzielona
 int utworz_pamiec_dzielona(void);
 StanJaskini* podlacz_pamiec_dzielona(int shmid);
@@ -135,26 +135,26 @@ int utworz_semafory(void);
 void inicjalizuj_semafory(int semid);
 void sem_wait_safe(int semid, int sem_num);
 void sem_signal_safe(int semid, int sem_num);
+int sem_trywait_safe(int semid, int sem_num);
+int sem_timed_wait_safe(int semid, int sem_num, int timeout_sec);
 int sem_getval_safe(int semid, int sem_num);
-void usun_semafory(int semid);  
+void usun_semafory(int semid);
+void ustaw_semafor_na_zero(int semid, int sem);
 
 // Kolejka komunikatów
 int utworz_kolejke(void);
 void usun_kolejke(int msgid);
+int sprawdz_miejsce_w_kolejce(int msgid);
 
-void zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid);
-void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid);
+int zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid, int czy_opiekun);
+void wyrejestruj_zwiedzajacego(StanJaskini *stan, int indeks, int semid);
 
-// === Funkcje kolejkowania ===
-// Zwiedzający dołącza do kolejki oczekujących na trasę
 void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid);
-
-// Przewodnik zbiera grupę z kolejki (zwraca liczbę zebranych osób)
 int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob);
-int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun, 
-                           StanJaskini *stan, int semid);
-// Funkcje pomocnicze
+
+
 void wypisz_stan_jaskini(StanJaskini *stan);
 void zapisz_log_symulacji(const char *format, ...);
+
 
 #endif // IPC_H
