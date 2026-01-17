@@ -176,22 +176,18 @@ void inicjalizuj_semafory(int semid) {
 }
 
 void sem_wait_safe(int semid, int sem_num) {
-    struct sembuf op;
-    op.sem_num = sem_num;
-    op.sem_op = -1;
-    op.sem_flg = 0;
+    struct sembuf op = {sem_num, -1, 0};
     
     while (semop(semid, &op, 1) < 0) {
         if (errno == EINTR) {
+            if (flaga_stop_ipc) {
+                _exit(0); 
+            }
             continue;
         }
-        if (errno == EIDRM || errno == EINVAL) {
-            DEBUG_PRINT("Semafory usunięte - kończę operację na sem %d", sem_num);
-            exit(0);
-        }
-        perror("semop wait");
-        log_error("Blad sem_wait na semaforze %d (errno=%d)", sem_num, errno);
-        return;
+        if (errno == EIDRM || errno == EINVAL) _exit(0);
+        perror("semop fatal error");
+        _exit(1);
     }
 }
 
@@ -215,6 +211,15 @@ void sem_signal_safe(int semid, int sem_num) {
     }
 }
 
+int sem_trywait_safe(int semid, int sem_num) {
+    struct sembuf op = {sem_num, -1, IPC_NOWAIT};
+    if (semop(semid, &op, 1) < 0) {
+        if (errno == EAGAIN) return 0; 
+        if (errno == EIDRM) _exit(0);
+    }
+    return 1; 
+}
+
 int sem_getval_safe(int semid, int sem_num) {
     int val = semctl(semid, sem_num, GETVAL);
     if (val < 0) {
@@ -222,6 +227,31 @@ int sem_getval_safe(int semid, int sem_num) {
         return -1;
     }
     return val;
+}
+
+int sem_timed_wait_safe(int semid, int sem_num, int timeout_sec) {
+    time_t deadline = time(NULL) + timeout_sec;
+    
+    while (1) {
+        struct sembuf op_try = {sem_num, -1, IPC_NOWAIT};
+        
+        if (semop(semid, &op_try, 1) == 0) {
+            return 0;
+        }
+        
+        if (errno == EAGAIN) {
+            if (time(NULL) >= deadline) {
+                return -1;  
+            }
+            usleep(10000);
+            continue;
+        }
+        
+        if (errno == EINTR) continue;
+        if (errno == EIDRM || errno == EINVAL) return -2;
+        
+        return -2;
+    }
 }
 
 void usun_semafory(int semid) {
@@ -232,6 +262,17 @@ void usun_semafory(int semid) {
         log_success("Usunięto semafory");
     }
 }
+
+void ustaw_semafor_na_zero(int semid, int sem) {
+    int val;
+    do {
+        val = semctl(semid, sem, GETVAL);
+        if (val > 0) {
+            sem_wait_safe(semid, sem);
+        }
+    } while (val > 0);
+}
+
 
 // === KOLEJKA KOMUNIKATÓW ===
 int utworz_kolejke(void) {
@@ -257,112 +298,75 @@ void usun_kolejke(int msgid) {
     }
 }
 
-// === REJESTRACJA ZWIEDZAJĄCYCH (dla ewakuacji) ===
-void zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
-    sem_wait_safe(semid, SEM_MUTEX);
-    
-    // Najpierw sprawdź, czy ten PID już tu jest (ochrona przed duplikatami)
-    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
-        if (stan->zwiedzajacy_pids[i] == pid) {
-            sem_signal_safe(semid, SEM_MUTEX);
-            return;
-        }
+// Sprawdzenie liczby komunikatów w kolejce
+int sprawdz_miejsce_w_kolejce(int msgid) {
+    struct msqid_ds buf;
+    if (msgctl(msgid, IPC_STAT, &buf) < 0) {
+        perror("msgctl IPC_STAT");
+        return -1;
     }
+    return (int)buf.msg_qnum;  // Liczba komunikatów w kolejce
+}
 
-    int zarejestrowano = 0;
-    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
+// === REJESTRACJA ZWIEDZAJĄCYCH ===
+int zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid, int czy_opiekun) {
+    sem_wait_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+    sem_wait_safe(semid, SEM_MUTEX);
+    int znaleziony_indeks = -1;
+
+    for (int i = 0; i < MAX_ZWIEDZAJACYCH_TABLICA; i++) {
         if (stan->zwiedzajacy_pids[i] == 0) {
             stan->zwiedzajacy_pids[i] = pid;
-            stan->liczba_aktywnych++; 
-            zarejestrowano = 1;
-            DEBUG_PRINT("Zarejestrowano zwiedzającego PID %d (aktywnych: %d)", 
-                       pid, stan->liczba_aktywnych);
-            break; 
+            stan->zwiedzajacy_jest_opiekunem[i] = czy_opiekun; 
+            stan->liczba_aktywnych++;
+            znaleziony_indeks = i;
+            DEBUG_PRINT("Zarejestrowano zwiedzającego PID %d (Opiekun: %d)", pid, czy_opiekun);
+            break;
         }
     }
 
-    if (!zarejestrowano) {
-        log_warning("Brak wolnych slotów dla zwiedzającego %d!", pid);
+    if (znaleziony_indeks == -1) {
+        log_error("Brak wolnych slotów dla zwiedzającego w pamięci dzielonej!");
     }
     
     sem_signal_safe(semid, SEM_MUTEX);
+    return znaleziony_indeks;
 }
 
-void wyrejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid) {
+void wyrejestruj_zwiedzajacego(StanJaskini *stan, int indeks, int semid) {
+    if (indeks < 0 || indeks >= MAX_ZWIEDZAJACYCH_TABLICA) return;
+
     sem_wait_safe(semid, SEM_MUTEX);
     
-    int found = 0;
-    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
-        if (stan->zwiedzajacy_pids[i] == pid) {
-            stan->zwiedzajacy_pids[i] = 0;
-            stan->liczba_aktywnych--;  
-            found = 1;
-            DEBUG_PRINT("Wyrejestrowano zwiedzającego PID %d (pozostało: %d)", 
-                       pid, stan->liczba_aktywnych);
-            break; 
-        }
-    }
-    
-    if (!found) {
-        DEBUG_PRINT("PID %d nie istnieje już w tablicy", pid);
+    if (stan->zwiedzajacy_pids[indeks] != 0) {
+        stan->zwiedzajacy_pids[indeks] = 0;
+        stan->zwiedzajacy_jest_opiekunem[indeks] = 0; // Czyścimy też cechę!
+        stan->liczba_aktywnych--;
+        DEBUG_PRINT("Zwiedzający wyrejestrowany. Slot %d zwolniony (pozostało aktywnych: %d)", 
+                    indeks, stan->liczba_aktywnych);
     }
     
     sem_signal_safe(semid, SEM_MUTEX);
+    sem_signal_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
 }
 
-// === ATOMOWE DODAWANIE PARY OPIEKUN-DZIECKO ===
-int dolacz_pare_do_kolejki(int trasa, pid_t pid_dziecko, pid_t pid_opiekun, 
-                           StanJaskini *stan, int semid) {
-    // Pary zawsze trasa 2
-     if (trasa != 2) {
-        log_error("BŁĄD: Opiekun z dzieckiem może tylko trasą 2!");
-        return 0;
-    }
-    
+void dolacz_do_kolejki(int nr_trasy, pid_t pid, StanJaskini *stan, int semid) {
     sem_wait_safe(semid, SEM_MUTEX);
     
-    if (stan->kolejka_trasa2_koniec + 2 <= MAX_ZWIEDZAJACYCH) {
-        int idx_d = stan->kolejka_trasa2_koniec++;
-        int idx_o = stan->kolejka_trasa2_koniec++;
-        
-        stan->kolejka_trasa2[idx_d] = pid_dziecko;
-        stan->kolejka_trasa2[idx_o] = pid_opiekun;
-        
-        stan->para_flaga[idx_d] = 1;  // PARA
-        stan->para_flaga[idx_o] = 0;  // Drugi element pary
-        
-        log_info("[KOLEJKA T2] Para dziecko %d + opiekun %d dołączyli (pozycje %d-%d)",
-                 pid_dziecko, pid_opiekun, idx_d + 1, idx_o + 1);
-        
-        sem_signal_safe(semid, SEM_MUTEX);
-        return 1;
-    } else {
-        log_error("[KOLEJKA T2] Brak miejsca dla pary!");
-        sem_signal_safe(semid, SEM_MUTEX);
-        return 0;
-    }
-}
-
-//  KOLEJKOWANIE ZWIEDZAJĄCYCH 
-void dolacz_do_kolejki(int trasa, pid_t pid, StanJaskini *stan, int semid) {
-
-    sem_wait_safe(semid, SEM_MUTEX);
+    pid_t *kolejka = (nr_trasy == 1) ? 
+        stan->kolejka_trasa1 : stan->kolejka_trasa2;
+    int *koniec = (nr_trasy == 1) ? 
+        &stan->kolejka_trasa1_koniec : &stan->kolejka_trasa2_koniec;
     
-    if (trasa == 1) {
-        if (stan->kolejka_trasa1_koniec < MAX_ZWIEDZAJACYCH) {
-            int idx = stan->kolejka_trasa1_koniec++;
-            stan->kolejka_trasa1[idx] = pid;
-
-            log_info("[KOLEJKA T1] Zwiedzający PID %d dołączył (pozycja %d)", pid, idx + 1);
-        }
-    } else {
-        if (stan->kolejka_trasa2_koniec < MAX_ZWIEDZAJACYCH) {
-            int idx = stan->kolejka_trasa2_koniec++;
-            stan->kolejka_trasa2[idx] = pid;
-            stan->para_flaga[idx] = 0;  // Pojedyncza osoba
-            log_info("[KOLEJKA T2] Zwiedzający PID %d dołączył (pozycja %d)", pid, idx + 1);
-        }
-    }
+    kolejka[*koniec] = pid;
+    (*koniec)++;
+    
+    DEBUG_PRINT("Zwiedzający PID %d dołączył do kolejki trasy %d (w kolejce: %d)",
+                pid, nr_trasy, *koniec);
+    
+    int sem_kolejka = (nr_trasy == 1) ? 
+        SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
+    sem_signal_safe(semid, sem_kolejka);
     
     sem_signal_safe(semid, SEM_MUTEX);
 }
@@ -376,56 +380,83 @@ int zbierz_grupe(int nr_trasy, StanJaskini *stan, int semid, int max_osob) {
     int *grupa_liczba = (nr_trasy == 1) ? &stan->grupa1_liczba : &stan->grupa2_liczba;
     
     if (*koniec == 0) {
-        sem_signal_safe(semid, SEM_MUTEX);
-        return 0;
+        int sem_kolejka = (nr_trasy == 1) ? 
+            SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
+        
+        // Wyczyść semafor (może być > 1 jeśli było wiele zwiedzających)
+        while (sem_trywait_safe(semid, sem_kolejka) == 1) {
+            // Dekrementuj aż do 0
+        }
+        
+        log_info("[PRZEWODNIK %d] Kolejka pusta - wyzerowano semafor NIEPUSTA", nr_trasy);
     }
     
-    int zebrano = 0;
+    int zebrano_osob = 0;      // Liczba miejsc (opiekun+dziecko = 2)
+    int zebrano_procesow = 0;  // Liczba procesów
     int idx = 0;
     
-    while (idx < *koniec && zebrano < max_osob) {
-        // Sprawdzaj flagę tylko dla trasy 2!
-        if (nr_trasy == 2 && stan->para_flaga[idx] == 1) {
-            // Para - weź oboje albo żadnego
-            if (zebrano + 2 <= max_osob) {
-                grupa_pids[zebrano++] = kolejka[idx++];  // Dziecko
-                grupa_pids[zebrano++] = kolejka[idx++];  // Opiekun
-                DEBUG_PRINT("[PRZEWODNIK %d] Zebrano parę dziecko+opiekun", nr_trasy);
-            } else {
-                DEBUG_PRINT("[PRZEWODNIK %d] Brak miejsca dla pary", nr_trasy);
+    // Zbierz procesy z kolejki
+    while (idx < *koniec && zebrano_osob < max_osob) {
+        pid_t pid = kolejka[idx];
+        
+        // Sprawdź czy proces istnieje
+        if (kill(pid, 0) != 0) {
+            log_warning("[PRZEWODNIK %d] PID %d nie istnieje - pomijam", nr_trasy, pid);
+            for (int i = idx; i < *koniec - 1; i++) {
+                kolejka[i] = kolejka[i + 1];
+            }
+            (*koniec)--;
+            continue;
+        }
+        
+        // Sprawdź czy to opiekun
+        int real_idx = -1;
+        for (int k = 0; k < MAX_ZWIEDZAJACYCH_TABLICA; k++) {
+            if (stan->zwiedzajacy_pids[k] == pid) {
+                real_idx = k;
                 break;
             }
+        }
+
+        int czy_opiekun = 0;
+        if (real_idx != -1) {
+            czy_opiekun = stan->zwiedzajacy_jest_opiekunem[real_idx];
         } else {
-            // Pojedyncza osoba (lub trasa 1 - nie ma par)
-            grupa_pids[zebrano++] = kolejka[idx++];
+            break; 
         }
+
+        int liczba_miejsc = czy_opiekun ? 2 : 1;
+        
+        // Sprawdź czy jest miejsce
+        if (zebrano_osob + liczba_miejsc > max_osob) {
+            break;
+        }
+        
+        // Dodaj do grupy
+        grupa_pids[zebrano_procesow] = pid;
+        zebrano_procesow++;
+        zebrano_osob += liczba_miejsc;
+
+        log_info("[PRZEWODNIK %d] Zwiedzający PID=%d %s zajął %d miejsc", nr_trasy, pid, czy_opiekun ? "(OPIEKUN)" : "(ZWYKŁY)",
+                 liczba_miejsc);
+        
+        idx++;
     }
     
-    *grupa_liczba = zebrano;
+    *grupa_liczba = zebrano_osob;
     
-    if (zebrano == 0) {
-        sem_signal_safe(semid, SEM_MUTEX);
-        return 0;
-    }
-    
-    // Usuń z kolejki
-    for (int i = idx; i < *koniec; i++) {
-        kolejka[i - idx] = kolejka[i];
-        // Kopiuj flagę TYLKO dla trasy 2
-        if (nr_trasy == 2) {
-            stan->para_flaga[i - idx] = stan->para_flaga[i];
-        }
+    // Usuń zebrane procesy z kolejki (przesuń pozostałe na początek)
+    for (int i = 0; i < *koniec - idx; i++) {
+        kolejka[i] = kolejka[i + idx];
     }
     *koniec -= idx;
     
-    log_success("[PRZEWODNIK %d] Zebrał grupę %d osób (w kolejce pozostało: %d)",
-               nr_trasy, zebrano, *koniec);
+    log_success("[PRZEWODNIK %d] Zebrał grupę %d osób (%d procesów, w kolejce pozostało: %d)",
+               nr_trasy, zebrano_osob, zebrano_procesow, *koniec);
     
     sem_signal_safe(semid, SEM_MUTEX);
-    return zebrano;
+    return zebrano_procesow;
 }
-
-// === WYŚWIETLANIE STANU ===
 
 void wypisz_stan_jaskini(StanJaskini *stan) {
     printf("\n" COLOR_BOLD COLOR_CYAN);
