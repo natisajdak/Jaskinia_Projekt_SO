@@ -64,23 +64,37 @@
 #define MSG_BILET_POWROT 1      // Powtórka - OMIJA KOLEJKĘ
 #define MSG_BILET_ZWYKLY 2    // Normalna kolejka       
 
+// Limit komunikatów w kolejce
+#define MAX_MSG_QUEUE 100
 
 // === SEMAFORY (indeksy w zestawie) ===
 enum {
     SEM_MUTEX = 0,
+    SEM_MUTEX_KLADKA,
     SEM_TRASA1_LIMIT,
     SEM_TRASA2_LIMIT,
-    SEM_KLADKA1,
-    SEM_KLADKA2,
+
+    SEM_KLADKA1,        // POJEMNOŚĆ KŁADKI TRASA 1 (init = K)
+    SEM_KLADKA2,        // POJEMNOŚĆ KŁADKI TRASA 2 (init = K)
+
     SEM_KOLEJKA1_NIEPUSTA,
-    SEM_KOLEJKA2_NIEPUSTA,  
-    SEM_PRZEWODNIK1_READY,      // Zwiedzający czeka na przewodnika 1
-    SEM_PRZEWODNIK2_READY,      // Zwiedzający czeka na przewodnika 2
-    SEM_GRUPA1_WEJSCIE_KLADKA,  // Sygnał do zwiedzającego: wejdź na kładkę
-    SEM_GRUPA2_WEJSCIE_KLADKA,  
-    SEM_GRUPA1_WYJSCIE_KLADKA,  // Sygnał: wyjdź z kładki
-    SEM_GRUPA2_WYJSCIE_KLADKA,
-    SEM_POTWIERDZENIE,          // Zwiedzający potwierdza akcję
+    SEM_KOLEJKA2_NIEPUSTA,
+
+    SEM_PRZEWODNIK1_READY,
+    SEM_PRZEWODNIK2_READY,
+
+    SEM_KLADKA1_WEJSCIE_ALLOWED,   // BINARNY
+    SEM_KLADKA1_WYJSCIE_ALLOWED,   // BINARNY
+    SEM_KLADKA2_WEJSCIE_ALLOWED,
+    SEM_KLADKA2_WYJSCIE_ALLOWED,
+    SEM_KOLEJKA_MSG_SLOTS,          
+    SEM_POTWIERDZENIE_WEJSCIE_TRASA1,
+    SEM_POTWIERDZENIE_WYJSCIE_TRASA1,
+
+    SEM_POTWIERDZENIE_WEJSCIE_TRASA2,
+    SEM_POTWIERDZENIE_WYJSCIE_TRASA2,
+    SEM_WOLNE_SLOTY_ZWIEDZAJACYCH,
+
     NUM_SEMS
 };
 
