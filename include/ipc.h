@@ -6,81 +6,91 @@
 #include <sys/shm.h>
 #include <sys/sem.h>
 #include <sys/msg.h>
+#include <pthread.h>
 #include "config.h"
 
-// === PAMIĘĆ DZIELONA ===
+// Maksymalna tablica 
+#define MAX_ZWIEDZAJACYCH_TABLICA 2000
 
+// === PAMIĘĆ DZIELONA ===
 typedef struct {
     // Liczniki osób na trasach
     int trasa1_licznik;
     int trasa2_licznik;
     
     // Kładki
-    int kladka1_licznik;        // Ile osób obecnie na kładce 1
-    int kladka2_licznik;        // Ile osób obecnie na kładce 2
+    int kladka1_licznik;
     int kladka1_kierunek;       // 0=wejście, 1=wyjście
+    int kladka2_licznik;
     int kladka2_kierunek;
     
-    int bilety_powrot;             
+    
+    int bilety_powrot;
     int bilety_dzieci_bez_opieki;
 
     // Statystyki
-    int bilety_sprzedane;       // Łączna liczba sprzedanych biletów
-    int bilety_trasa1;          // Bilety na trasę 1
-    int bilety_trasa2;          // Bilety na trasę 2
+    int bilety_sprzedane;
+    int bilety_trasa1;
+    int bilety_trasa2;
+    
+    // Licznik wszystkich wygenerowanych zwiedzających
+    int licznik_wygenerowanych;  // Inkrementowany przez generator
+    int licznik_odrzuconych;     // Odmowy biletu
     
     // Grupy aktywne
-    int grupa1_aktywna;         // 1 jeśli przewodnik 1 ma grupę
-    int grupa2_aktywna;         // 1 jeśli przewodnik 2 ma grupę
+    int grupa1_aktywna;
+    int grupa2_aktywna;
     
-    // PID procesów (do sygnałów)
+    // PID procesów
     pid_t pid_main;
     pid_t pid_kasjer;
     pid_t pid_przewodnik1;
     pid_t pid_przewodnik2;
     pid_t pid_straznik;
+    pid_t pid_generator; 
     
     // Flagi zamknięcia
     volatile sig_atomic_t zamkniecie_przewodnik1;
     volatile sig_atomic_t zamkniecie_przewodnik2;
     
-    int jaskinia_otwarta;  // 1 = otwarta, 0 = zamknięta
+    int jaskinia_otwarta;
     
-    // Tablica aktywnych zwiedzających (do ewakuacji)
-    pid_t zwiedzajacy_pids[MAX_ZWIEDZAJACYCH];  // MAX_ZWIEDZAJACYCH
+    // Tablica aktywnych zwiedzających (dynamiczna lista)
+    pid_t zwiedzajacy_pids[MAX_ZWIEDZAJACYCH_TABLICA];
     int liczba_aktywnych;
+    int zwiedzajacy_jest_opiekunem[MAX_ZWIEDZAJACYCH_TABLICA]; 
     
-    // Czas startu symulacji (dla logów)
+    // Czas startu
     time_t czas_startu;
-    
-    // === System czasu symulacji ===
-    time_t czas_rzeczywisty_start;  // Kiedy symulacja wystartowała (real time)
-    int symulowany_czas_sekund;      // Ile sekund minęło w symulacji
+    time_t czas_rzeczywisty_start;
+    int symulowany_czas_sekund;
 
-    int trasa1_wycieczka_nr;  // Numer bieżącej wycieczki
+    int trasa1_wycieczka_nr;
     int trasa2_wycieczka_nr;
-    int trasa1_czeka_na_grupe; // 1 = przewodnik czeka na grupę
+    int trasa1_czeka_na_grupe;
     int trasa2_czeka_na_grupe;
 
     // === KOLEJKI OCZEKUJĄCYCH ===
-    pid_t kolejka_trasa1[MAX_ZWIEDZAJACYCH];  // MAX_ZWIEDZAJACYCH
+    pid_t kolejka_trasa1[MAX_ZWIEDZAJACYCH_TABLICA];
     int kolejka_trasa1_poczatek;
     int kolejka_trasa1_koniec;
     
-    pid_t kolejka_trasa2[MAX_ZWIEDZAJACYCH];
+    pid_t kolejka_trasa2[MAX_ZWIEDZAJACYCH_TABLICA];
     int kolejka_trasa2_poczatek;
     int kolejka_trasa2_koniec;
     
-    int para_flaga[MAX_ZWIEDZAJACYCH];  //PARA OPIEKUN+DZIECKO TYLKO NA TRASIE 2
-
-    // Aktualne grupy w trasie (lista PID-ów)
-    pid_t grupa1_pids[N1];  // N1
+    // Aktualne grupy w trasie
+    pid_t grupa1_pids[N1];
     int grupa1_liczba;
+    int grupa1_czeka_na_wpuszczenie; 
     
-    pid_t grupa2_pids[N2];  // N2
+    pid_t grupa2_pids[N2];
     int grupa2_liczba;
+    int grupa2_czeka_na_wpuszczenie;
+
     
 } StanJaskini;
+
 
 // KOLEJKA KOMUNIKATÓW (Kasjer ↔ Zwiedzający)
 
@@ -93,18 +103,15 @@ typedef struct {
     int trasa;
     int czy_powrot;             
     
-    int jest_opiekunem;          // 1=ten zwiedzający jest opiekunem dziecka
-    int pid_opiekuna;            // PID opiekuna (jeśli dziecko)
-    int pid_dziecka;             // PID dziecka (jeśli opiekun)
+    int jest_opiekunem;           // 1 = ten proces ma wątek-dziecko
+    int wiek_dziecka;             
     
     // Odpowiedź kasjera (response)
     int bilet_wydany;
     float cena;
     char powod_odmowy[128];
     
-    // Timestamp
     time_t timestamp;
-    
 } MsgBilet;
 
 // UNIA DLA SEMCTL (wymagane na niektórych systemach)
