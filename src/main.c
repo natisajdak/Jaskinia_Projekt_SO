@@ -20,10 +20,10 @@ StanJaskini *stan_global = NULL;
 volatile sig_atomic_t zamkniecie = 0;
 
 // Lista PID procesów potomnych
-pid_t pids[MAX_ZWIEDZAJACYCH + 10];
+#define MAX_PIDS 200
+pid_t pids[MAX_PIDS];
 int liczba_procesow = 0;
 
-// Funkcja sprzątająca
 void cleanup(void) {
     log_info("Sprzątanie zasobów...");
     
@@ -34,33 +34,9 @@ void cleanup(void) {
                              stan_global->bilety_sprzedane,
                              stan_global->bilety_trasa1,
                              stan_global->bilety_trasa2);
+        
         odlacz_pamiec_dzielona(stan_global);
     }
-    
-    log_info("Czekam na zakończenie wszystkich procesów potomnych...");
-    int status;
-    pid_t pid;
-    int zebranych = 0;
-    
-    // BLOCKING wait - czekaj na każdy proces
-    while (1) {
-        pid = wait(&status); 
-        
-        if (pid > 0) {
-            zebranych++;
-            DEBUG_PRINT("Zebrany proces %d", pid);
-        } else if (pid == -1) {
-            if (errno == ECHILD) {
-                log_success("Wszystkie procesy potomne zakończone");
-                break;
-            } else {
-                perror("wait");
-                break;
-            }
-        }
-    }
-    
-    log_info("Zebrano %d procesów", zebranych);
     
     if (shmid_global >= 0) {
         usun_pamiec_dzielona(shmid_global);
@@ -77,7 +53,6 @@ void cleanup(void) {
     log_success("Zasoby zwolnione");
 }
 
-// Obsługa Ctrl+C
 void obsluga_sigint(int sig) {
     (void)sig;
     zamkniecie = 1;
@@ -88,7 +63,7 @@ void awaryjne_zamkniecie(void) {
     log_warning("╔═══════════════════════════════════════╗");
     log_warning("║    AWARYJNE ZAMYKANIE JASKINI...      ║");
     log_warning("╚═══════════════════════════════════════╝");
-
+    
     if (stan_global) {
         sem_wait_safe(semid_global, SEM_MUTEX);
         stan_global->zamkniecie_przewodnik1 = 1;
@@ -112,16 +87,18 @@ void awaryjne_zamkniecie(void) {
             }
         }
         
+        if (stan_global->pid_generator > 0) {
+            log_info("→ Wysyłam SIGTERM do generatora (PID %d)", stan_global->pid_generator);
+            kill(stan_global->pid_generator, SIGTERM);
+        }
+        
         log_warning("→ Ewakuacja aktywnych zwiedzających...");
         
         int ewakuowani = 0;
-        for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
+        for (int i = 0; i < MAX_ZWIEDZAJACYCH_TABLICA; i++) {
             if (stan_global->zwiedzajacy_pids[i] > 0) {
-                if (kill(stan_global->zwiedzajacy_pids[i], SIGTERM) == -1) {
-                    perror("kill zwiedzajacy");
-                } else {
-                    ewakuowani++;
-                }
+                kill(stan_global->zwiedzajacy_pids[i], SIGTERM);
+                ewakuowani++;
             }
         }
         
@@ -166,7 +143,7 @@ void awaryjne_zamkniecie(void) {
     log_success("AWARYJNE ZAMKNIĘCIE ZAKOŃCZONE");
 }
 
-// Walidacja parametrów
+
 void waliduj_parametry(void) {
     int bledy = 0;
     
@@ -182,21 +159,8 @@ void waliduj_parametry(void) {
         log_error("BŁĄD: Tp (%d:00) musi być < Tk (%d:00)", TP, TK);
         bledy++;
     }
-    if (CZAS_OTWARCIA_SEK <= T1) {
-        log_error("BŁĄD: Czas otwarcia (%d sek) musi być > T1 (%d sek)", CZAS_OTWARCIA_SEK, T1);
-        bledy++;
-    }
-    if (CZAS_OTWARCIA_SEK <= T2) {
-        log_error("BŁĄD: Czas otwarcia (%d sek) musi być > T2 (%d sek)", CZAS_OTWARCIA_SEK, T2);
-        bledy++;
-    }
     if (K < 1) {
         log_error("BŁĄD: K musi być >= 1");
-        bledy++;
-    }
-    if (LICZBA_ZWIEDZAJACYCH > MAX_ZWIEDZAJACYCH) {
-        log_error("BŁĄD: LICZBA_ZWIEDZAJACYCH (%d) > MAX (%d)", 
-                 LICZBA_ZWIEDZAJACYCH, MAX_ZWIEDZAJACYCH);
         bledy++;
     }
     
@@ -209,7 +173,6 @@ void waliduj_parametry(void) {
                 N1, N2, K, T1, T2, TP, TK);
 }
 
-// Inicjalizacja struktur IPC
 void inicjalizuj_ipc(void) {
     log_info("Inicjalizacja struktur IPC...");
     
@@ -218,13 +181,8 @@ void inicjalizuj_ipc(void) {
     
     memset(stan_global, 0, sizeof(StanJaskini));
     stan_global->pid_main = getpid();
-    stan_global->jaskinia_otwarta = 0;  // Zamknięta na start
-    // czas_startu będzie ustawiony po TP
+    stan_global->jaskinia_otwarta = 0;
     
-    for (int i = 0; i < MAX_ZWIEDZAJACYCH; i++) {
-    stan_global->para_flaga[i] = 0;
-    }
-
     log_success("Pamięć dzielona zainicjalizowana");
     
     semid_global = utworz_semafory();
@@ -235,25 +193,18 @@ void inicjalizuj_ipc(void) {
     log_success("Wszystkie struktury IPC gotowe");
 }
 
-// Stwórz pliki logów
 void utworz_logi(void) {
     if (system("mkdir -p logs") != 0) {
         perror("system mkdir");
-        log_warning("Nie można utworzyć katalogu logs/ - może już istnieje");
+        log_warning("Nie można utworzyć katalogu logs/");
     }
-    if (unlink(LOG_BILETY) == -1 && errno != ENOENT) {
-        perror("unlink bilety");
-    }
-    if (unlink(LOG_TRASA1) == -1 && errno != ENOENT) {
-        perror("unlink trasa1");
-    }
-    if (unlink(LOG_TRASA2) == -1 && errno != ENOENT) {
-        perror("unlink trasa2");
-    }
-    if (unlink(LOG_SYMULACJA) == -1 && errno != ENOENT) {
-        perror("unlink symulacja");
-    }
-        
+    
+    unlink(LOG_BILETY);
+    unlink(LOG_TRASA1);
+    unlink(LOG_TRASA2);
+    unlink(LOG_SYMULACJA);
+    unlink(LOG_GENERATOR); 
+    
     time_t now = time(NULL);
     log_to_file(LOG_SYMULACJA, "=== START SYMULACJI JASKINIA ===");
     log_to_file(LOG_SYMULACJA, "Data: %s", ctime(&now));
@@ -263,35 +214,26 @@ void utworz_logi(void) {
     log_to_file(LOG_BILETY, "PID | Wiek | Trasa | Powrót | Cena | Status | Info");
     log_to_file(LOG_TRASA1, "=== LOGI PRZEWODNIKA TRASY 1 ===");
     log_to_file(LOG_TRASA2, "=== LOGI PRZEWODNIKA TRASY 2 ===");
+    log_to_file(LOG_GENERATOR, "=== LOG GENERATORA ZWIEDZAJĄCYCH ===");
     
     log_success("Pliki logów utworzone");
 }
-// Ustawia zmienne środowiskowe
+
 void ustaw_env_ipc(void) {
     char buf[32];
     
     snprintf(buf, sizeof(buf), "%d", shmid_global);
-    if (setenv("SHMID", buf, 1) == -1) {
-        perror("setenv SHMID");
-        exit(1);
-    }
+    setenv("SHMID", buf, 1);
     
     snprintf(buf, sizeof(buf), "%d", semid_global);
-    if (setenv("SEMID", buf, 1) == -1) {
-        perror("setenv SEMID");
-        exit(1);
-    }
+    setenv("SEMID", buf, 1);
     
     snprintf(buf, sizeof(buf), "%d", msgid_global);
-    if (setenv("MSGID", buf, 1) == -1) {
-        perror("setenv MSGID");
-        exit(1);
-    }
+    setenv("MSGID", buf, 1);
 }
 
-// Dodaj PID do listy
 void dodaj_pid(pid_t pid) {
-    if (liczba_procesow < (MAX_ZWIEDZAJACYCH + 10)) {
+    if (liczba_procesow < MAX_PIDS) {
         pids[liczba_procesow++] = pid;
     }
 }
@@ -314,39 +256,35 @@ int main(int argc, char *argv[]) {
     
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = obsluga_sigint; //ten sam handler
+    sa.sa_handler = obsluga_sigint;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-
-    if (sigaction(SIGINT, &sa, NULL) == -1) {
-        perror("sigaction INT");
-        exit(1);
-    }
-
-    if (sigaction(SIGTERM, &sa, NULL) == -1) { perror("sigaction TERM"); exit(1); }
-
+    
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    
     waliduj_parametry();
     inicjalizuj_ipc();
     utworz_logi();
     ustaw_env_ipc();
     
-    // WYŚWIETL INFORMACJE O CZASIE SYMULACJI
+    // WYŚWIETL INFORMACJE
     printf(COLOR_CYAN "\n");
-    printf("╔════════════════════════════════════════════╗\n");
-    printf("║      PARAMETRY CZASU SYMULACJI             ║\n");
-    printf("╠════════════════════════════════════════════╣\n");
-    printf("║ Godziny jaskini:     %02d:00 - %02d:00         ║\n", TP, TK);
+    printf("╔═════════════════════════════════════════════╗\n");
+    printf("║      PARAMETRY CZASU SYMULACJI              ║\n");
+    printf("╠═════════════════════════════════════════════╣\n");
+    printf("║ Godziny jaskini:     %02d:00 - %02d:00          ║\n", TP, TK);
     printf("║ Czas rzeczywisty:    %d godzin              ║\n", TK - TP);
-    printf("║ Przyspieszenie:      %dx                  ║\n", PRZYSPIESZENIE);
-    printf("║ Czas symulacji:      %d sek (~%.1f min)    ║\n", 
+    printf("║ Przyspieszenie:      %dx                   ║\n", PRZYSPIESZENIE);
+    printf("║ Czas symulacji:      %d sek (~%.1f min)      ║\n",
            CZAS_OTWARCIA_SEK, CZAS_OTWARCIA_SEK / 60.0);
-    printf("╠════════════════════════════════════════════╣\n");
-    printf("║ 1 sekunda symulacji = %.1f min rzeczywistych║\n", 
+    printf("╠═════════════════════════════════════════════╣\n");
+    printf("║ 1 sekunda symulacji = %.1f min rzeczywistych║\n",
            PRZYSPIESZENIE / 60.0);
-    printf("╚════════════════════════════════════════════╝\n");
+    printf("╚═════════════════════════════════════════════╝\n");
     printf(COLOR_RESET "\n");
     
-    // OTWÓRZ JASKINIĘ (symulujemy że jest godzina Tp)
+    // OTWÓRZ JASKINIĘ
     sem_wait_safe(semid_global, SEM_MUTEX);
     stan_global->jaskinia_otwarta = 1;
     stan_global->czas_startu = time(NULL);
@@ -362,23 +300,23 @@ int main(int argc, char *argv[]) {
     
     // URUCHOM PROCESY
     pid_t pid_kasjer = fork();
-    if (pid_kasjer < 0) {
-        perror("fork kasjer");
-        exit(1);
-    } else if (pid_kasjer == 0) {
+    if (pid_kasjer == 0) {
         execl("./bin/kasjer", "kasjer", NULL);
         perror("execl kasjer");
-        exit(1);
+        _exit(1);
     }
     dodaj_pid(pid_kasjer);
+    sleep(1);
+    if (kill(pid_kasjer, 0) != 0) {
+        log_error("Nie udało się uruchomić kasjera (PID %d)", pid_kasjer);
+        exit(1);
+    }
+
     log_success("Uruchomiono kasjera (PID %d)", pid_kasjer);
     sleep(1);
     
     pid_t pid_przewodnik1 = fork();
-    if (pid_przewodnik1 < 0) {
-        perror("fork przewodnik1");
-        exit(1);
-    } else if (pid_przewodnik1 == 0) {
+    if (pid_przewodnik1 == 0) {
         execl("./bin/przewodnik", "przewodnik", "1", NULL);
         perror("execl przewodnik1");
         exit(1);
@@ -388,10 +326,7 @@ int main(int argc, char *argv[]) {
     sleep(1);
     
     pid_t pid_przewodnik2 = fork();
-    if (pid_przewodnik2 < 0) {
-        perror("fork przewodnik2");
-        exit(1);
-    } else if (pid_przewodnik2 == 0) {
+    if (pid_przewodnik2 == 0) {
         execl("./bin/przewodnik", "przewodnik", "2", NULL);
         perror("execl przewodnik2");
         exit(1);
@@ -401,10 +336,7 @@ int main(int argc, char *argv[]) {
     sleep(1);
     
     pid_t pid_straznik = fork();
-    if (pid_straznik < 0) {
-        perror("fork straznik");
-        exit(1);
-    } else if (pid_straznik == 0) {
+    if (pid_straznik == 0) {
         execl("./bin/straznik", "straznik", NULL);
         perror("execl straznik");
         exit(1);
@@ -413,56 +345,26 @@ int main(int argc, char *argv[]) {
     log_success("Uruchomiono strażnika (PID %d)", pid_straznik);
     sleep(2);
     
-    // Zwiedzający pojawiają się losowo podczas otwarcia (Tp do Tk)
-    log_info("Uruchamiam %d zwiedzających...", LICZBA_ZWIEDZAJACYCH);
-    log_info("Zwiedzający będą pojawiać się losowo przez %d sekund (symulowane: %02d:00-%02d:00)", 
-             CZAS_OTWARCIA_SEK, TP, TK);
-    
-    for (int i = 0; i < LICZBA_ZWIEDZAJACYCH; i++) {
-        // Losowe opóźnienie proporcjonalne do czasu otwarcia
-        int max_opoznienie = CZAS_OTWARCIA_SEK / LICZBA_ZWIEDZAJACYCH + 2;
-        sleep(losuj(OPOZNIENIE_ZWIEDZAJACY_MIN, max_opoznienie));
-        
-        // Sprawdź czy jaskinia nadal otwarta
-        sem_wait_safe(semid_global, SEM_MUTEX);
-        int otwarta = stan_global->jaskinia_otwarta;
-        sem_signal_safe(semid_global, SEM_MUTEX);
-
-        if (!otwarta) {
-            log_warning("Jaskinia zamknięta - nie uruchamiam więcej zwiedzających");
-            break;
-        }
-
-        if (zamkniecie) {
-        log_warning("Przerwanie przez użytkownika - nie uruchamiam więcej zwiedzających");
-        break;
+    // POPRAWKA 1: Uruchom GENERATOR (zamiast pętli for)
+    pid_t pid_generator = fork();
+    if (pid_generator == 0) {
+        execl("./bin/generator", "generator", NULL);
+        perror("execl generator");
+        exit(1);
     }
-        
-        pid_t pid_zwiedzajacy = fork();
-        if (pid_zwiedzajacy < 0) {
-            perror("fork zwiedzajacy");
-            continue;
-        } else if (pid_zwiedzajacy == 0) {
-            execl("./bin/zwiedzajacy", "zwiedzajacy", NULL);
-            perror("execl zwiedzajacy");
-            exit(1);
-        }
-        
-        dodaj_pid(pid_zwiedzajacy);
-        log_info("Zwiedzający #%d (PID %d) pojawił się", i+1, pid_zwiedzajacy);
-    }
+    dodaj_pid(pid_generator);
+    log_success("Uruchomiono generator zwiedzających (PID %d)", pid_generator);
     
-    log_success("Wszyscy zwiedzający uruchomieni");
-    log_info("Symulacja trwa (max %d sekund)...", CZAS_SYMULACJI);
+    log_info("Generator będzie tworzył zwiedzających LOSOWO przez %d sekund", CZAS_OTWARCIA_SEK);
+    log_info("Częstotliwość: co %d-%d sekund", GENERATOR_MIN_DELAY, GENERATOR_MAX_DELAY);
     
     // CZEKAJ NA PROCESY
     int status;
     pid_t pid;
     int zakonczonych = 0;
     
-    // Daj czas na normalne zakończenie (czekaj maksymalnie CZAS_SYMULACJI + 10s)
     time_t start_wait = time(NULL);
-    int max_wait_time = CZAS_SYMULACJI + 10;
+    int max_wait_time = CZAS_SYMULACJI + 30;
     
     while (1) {
         if (zamkniecie) {
@@ -487,22 +389,18 @@ int main(int argc, char *argv[]) {
                 log_warning("Proces %d zakończony sygnałem %d", pid, WTERMSIG(status));
             }
         } else if (pid == 0) {
-            // Brak procesów do zebrania - sprawdź timeout
             if (difftime(time(NULL), start_wait) > max_wait_time) {
                 log_warning("Timeout oczekiwania na procesy - wymuszam zakończenie");
                 
-                // Zabij pozostałe procesy przy timeout
                 for (int i = 0; i < liczba_procesow; i++) {
                     if (pids[i] > 0) {
-                        if (kill(pids[i], SIGKILL) == -1 && errno != ESRCH) {
-                            perror("kill SIGKILL");
-                        }
+                        kill(pids[i], SIGKILL);
                     }
                 }
                 sleep(1);
                 break;
             }
-            usleep(100000); 
+            sleep(1);
         } else {
             if (errno == ECHILD) {
                 log_success("Brak procesów potomnych - wszystkie zakończone");
@@ -514,7 +412,6 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Po timeout - sprawdź czy są jeszcze procesy zombie
     log_info("Sprawdzam pozostałe procesy...");
     while ((pid = wait(&status)) > 0) {
         zakonczonych++;
@@ -530,20 +427,22 @@ int main(int argc, char *argv[]) {
     printf("\n");
     
     printf(COLOR_BOLD "PODSUMOWANIE:\n" COLOR_RESET);
-    printf("──────────────────────────────────────────\n");
+    printf("─────────────────────────────────────────────\n");
+    printf("Wygenerowano:         %d zwiedzających\n", stan_global->licznik_wygenerowanych);
     printf("Sprzedane bilety:     %d\n", stan_global->bilety_sprzedane);
-    printf("  └─ Trasa 1:         %d\n", stan_global->bilety_trasa1);
-    printf("  └─ Trasa 2:         %d\n", stan_global->bilety_trasa2);
+    printf("  ├─ Trasa 1:         %d\n", stan_global->bilety_trasa1);
+    printf("  ├─ Trasa 2:         %d\n", stan_global->bilety_trasa2);
     printf("  └─ Powtórki:        %d\n", stan_global->bilety_powrot);
-    printf("Odmowy (dzieci):      %d\n", stan_global->bilety_dzieci_bez_opieki);
+    printf("Odmowy:               %d\n", stan_global->licznik_odrzuconych);
     printf("Czas trwania:         %d sekund\n", CZAS_SYMULACJI);
-    printf("──────────────────────────────────────────\n");
+    printf("─────────────────────────────────────────────\n");
     printf("\n");
     
     printf(COLOR_GREEN "Logi zapisane w katalogu: logs/\n" COLOR_RESET);
     printf("  - bilety.txt       - sprzedane bilety\n");
     printf("  - trasa1.txt       - przewodnik 1\n");
     printf("  - trasa2.txt       - przewodnik 2\n");
+    printf("  - generator.txt    - wygenerowane osoby\n");
     printf("  - symulacja.log    - ogólny log\n");
     printf("\n");
     
