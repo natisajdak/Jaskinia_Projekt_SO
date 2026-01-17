@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <time.h>
 #include <stdarg.h>
@@ -9,8 +10,11 @@
 #include <sys/shm.h>
 #include <sys/sem.h>
 #include <sys/msg.h>
+#include <time.h>
 #include "../include/ipc.h"
 #include "../include/utils.h"
+
+volatile sig_atomic_t flaga_stop_ipc = 0;
 
 // === PAMIĘĆ DZIELONA ===
 int utworz_pamiec_dzielona(void) {
@@ -74,10 +78,16 @@ int utworz_semafory(void) {
 void inicjalizuj_semafory(int semid) {
     union semun arg;
     
+    log_info("═══ INICJALIZACJA SEMAFORÓW ═══");
+    
     // SEM_MUTEX - mutex (1)
     arg.val = 1;
     semctl(semid, SEM_MUTEX, SETVAL, arg);
     log_info("Semafor SEM_MUTEX = 1");
+
+    arg.val = 1;
+    semctl(semid, SEM_MUTEX_KLADKA, SETVAL, arg);
+    log_info("Semafor SEM_MUTEX_KLADKA = 1");
     
     // SEM_TRASA1_LIMIT - counting (N1)
     arg.val = N1;
@@ -99,6 +109,16 @@ void inicjalizuj_semafory(int semid) {
     semctl(semid, SEM_KLADKA2, SETVAL, arg);
     log_info("Semafor SEM_KLADKA2 = %d", K);
     
+    // SEM_KOLEJKA1_NIEPUSTA - binary (0 na start)
+    arg.val = 0;
+    semctl(semid, SEM_KOLEJKA1_NIEPUSTA, SETVAL, arg);
+    log_info("Semafor SEM_KOLEJKA1_NIEPUSTA = 0");
+    
+    // SEM_KOLEJKA2_NIEPUSTA - binary (0 na start)
+    arg.val = 0;
+    semctl(semid, SEM_KOLEJKA2_NIEPUSTA, SETVAL, arg);
+    log_info("Semafor SEM_KOLEJKA2_NIEPUSTA = 0");
+    
     // SEM_PRZEWODNIK1_READY - binary (0 na start)
     arg.val = 0;
     semctl(semid, SEM_PRZEWODNIK1_READY, SETVAL, arg);
@@ -109,20 +129,50 @@ void inicjalizuj_semafory(int semid) {
     semctl(semid, SEM_PRZEWODNIK2_READY, SETVAL, arg);
     log_info("Semafor SEM_PRZEWODNIK2_READY = 0");
     
+    // SEM_KLADKA1_WEJSCIE_ALLOWED - binary (0 = zamknięte na start)
     arg.val = 0;
-    semctl(semid, SEM_GRUPA1_WEJSCIE_KLADKA, SETVAL, arg);
-    semctl(semid, SEM_GRUPA2_WEJSCIE_KLADKA, SETVAL, arg);
-    semctl(semid, SEM_GRUPA1_WYJSCIE_KLADKA, SETVAL, arg);
-    semctl(semid, SEM_GRUPA2_WYJSCIE_KLADKA, SETVAL, arg);
-    semctl(semid, SEM_POTWIERDZENIE, SETVAL, arg);
-    log_info("Semafory komunikacji zwiedzający-przewodnik = 0");
+    semctl(semid, SEM_KLADKA1_WEJSCIE_ALLOWED, SETVAL, arg);
+    log_info("Semafor SEM_KLADKA1_WEJSCIE_ALLOWED = 0 (zamknięte)");
+    
+    // SEM_KLADKA1_WYJSCIE_ALLOWED - binary (0 = zamknięte na start)
+    arg.val = 0;
+    semctl(semid, SEM_KLADKA1_WYJSCIE_ALLOWED, SETVAL, arg);
+    log_info("Semafor SEM_KLADKA1_WYJSCIE_ALLOWED = 0 (zamknięte)");
+    
+    // SEM_KLADKA2_WEJSCIE_ALLOWED - binary (0 = zamknięte na start)
+    arg.val = 0;
+    semctl(semid, SEM_KLADKA2_WEJSCIE_ALLOWED, SETVAL, arg);
+    log_info("Semafor SEM_KLADKA2_WEJSCIE_ALLOWED = 0 (zamknięte)");
+    
+    // SEM_KLADKA2_WYJSCIE_ALLOWED - binary (0 = zamknięte na start)
+    arg.val = 0;
+    semctl(semid, SEM_KLADKA2_WYJSCIE_ALLOWED, SETVAL, arg);
+    log_info("Semafor SEM_KLADKA2_WYJSCIE_ALLOWED = 0 (zamknięte)");
+    
+    // SEM_KOLEJKA_MSG_SLOTS - counting (98 = 100 - 2 odpowiedzi)
+    arg.val = MAX_MSG_QUEUE - 2;
+    semctl(semid, SEM_KOLEJKA_MSG_SLOTS, SETVAL, arg);
+    
+    // SEM_POTWIERDZENIE - counting (0 na start)
+    arg.val = 0;
+    semctl(semid, SEM_POTWIERDZENIE_WEJSCIE_TRASA1, SETVAL, arg);
+    log_info("Semafor SEM_POTWIERDZENIE_WEJSCIE_TRASA1 = 0");
 
     arg.val = 0;
-    semctl(semid, SEM_KOLEJKA1_NIEPUSTA, SETVAL, arg);
-    semctl(semid, SEM_KOLEJKA2_NIEPUSTA, SETVAL, arg);
-    log_info("Semafory kolejek niepustych = 0");
+    semctl(semid, SEM_POTWIERDZENIE_WYJSCIE_TRASA1, SETVAL, arg);
+    log_info("Semafor SEM_POTWIERDZENIE_WYJSCIE_TRASA1 = 0 ");
+
+    arg.val = 0;
+    semctl(semid, SEM_POTWIERDZENIE_WEJSCIE_TRASA2, SETVAL, arg);
+    log_info("Semafor SEM_POTWIERDZENIE_WEJSCIE_TRASA2 = 0");
+
+    arg.val = 0;
+    semctl(semid, SEM_POTWIERDZENIE_WYJSCIE_TRASA2, SETVAL, arg);
+    log_info("Semafor SEM_POTWIERDZENIE_WYJSCIE_TRASA2 = 0 ");
+
+    semctl(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH, SETVAL, MAX_ZWIEDZAJACYCH_TABLICA);
     
-    log_success("Wszystkie semafory zainicjalizowane");
+    log_success("Wszystkie semafory zainicjalizowane (%d semaforów)", NUM_SEMS);
 }
 
 void sem_wait_safe(int semid, int sem_num) {
