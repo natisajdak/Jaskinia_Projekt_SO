@@ -172,75 +172,218 @@ int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     return 1;
 }
 
-void wycieczka_dziecka(pid_t dziecko_pid, int trasa, int msgid, StanJaskini *stan, int semid) {
-    Zwiedzajacy dziecko;
-    dziecko.wiek = losuj(1, WIEK_TYLKO_TRASA2_DZIECKO - 1);
-    dziecko.trasa = trasa;  // TĄ SAMĄ CO OPIEKUN
-    dziecko.czy_powrot = 0;
-    dziecko.jest_dzieckiem = 1;
-    dziecko.jest_opiekunem = 0;
-    dziecko.pid_opiekuna = getppid();  // PID rodzica (opiekuna)
-    dziecko.pid_dziecka = 0;
+// MECHANIZM KŁADKI: semafor → kładka → semafor
+int wejscie_na_kladke(int trasa, pid_t pid, int jest_opiekunem) {
+    int sem_wejscie_allowed = (trasa == 1) ? 
+        SEM_KLADKA1_WEJSCIE_ALLOWED : SEM_KLADKA2_WEJSCIE_ALLOWED;
+    int sem_kladka = (trasa == 1) ? SEM_KLADKA1 : SEM_KLADKA2;
+    int sem_potw = (trasa == 1) ? SEM_POTWIERDZENIE_WEJSCIE_TRASA1 : SEM_POTWIERDZENIE_WEJSCIE_TRASA2;
+    int sem_limit_trasy = (trasa == 1) ? SEM_TRASA1_LIMIT : SEM_TRASA2_LIMIT;
+    int liczba_miejsc = jest_opiekunem ? 2 : 1;
     
-    log_info("[DZIECKO %d] Wiek: %d, Opiekun: PID %d, Trasa: %d", 
-             dziecko_pid, dziecko.wiek, dziecko.pid_opiekuna, trasa);
-    
-    zarejestruj_zwiedzajacego(stan, dziecko_pid, semid);
-    
-    if (!kup_bilet(&dziecko, msgid, dziecko_pid)) {
-        wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
-        exit(1);
+    if (jest_opiekunem) {
+        log_info("[OPIEKUN %d] Czekam na otwarcie WEJŚCIA na kładkę (z dzieckiem = %d miejsca)...", 
+                 pid, liczba_miejsc);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Czekam na otwarcie WEJŚCIA na kładkę...", pid);
     }
     
-    // DZIECKO NIE DOŁĄCZA - opiekun doda ich oboje atomowo!
-    // Tylko czeka na przewodnika
-    int sem_gotowa = (dziecko.trasa == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
-    log_info("[DZIECKO %d] Czekam na przewodnika razem z opiekunem...", dziecko_pid);
-    sem_wait_safe(semid, sem_gotowa);
-    
-    if (!stan->jaskinia_otwarta || flaga_ewakuacja) {
-        log_warning("[DZIECKO %d] Jaskinia zamknięta - wychodzę z opiekunem", dziecko_pid);
-        wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
-        exit(0);
+    if (flaga_stop_ipc) {
+        for (int i = 0; i < liczba_miejsc; i++)
+            sem_signal_safe(semid_global, sem_limit_trasy);
+        return -1;
     }
-    
-    log_success("[DZIECKO %d] Przewodnik zabrał nas w trasę!", dziecko_pid);
-    
-    // WEJŚCIE NA KŁADKĘ
-    int sem_wejscie = (dziecko.trasa == 1) ? SEM_GRUPA1_WEJSCIE_KLADKA : SEM_GRUPA2_WEJSCIE_KLADKA;
-    
-    log_info("[DZIECKO %d] Wchodzę na kładkę z opiekunem", dziecko_pid);
-    sem_wait_safe(semid, sem_wejscie);
-    sem_signal_safe(semid, SEM_POTWIERDZENIE);
-    
-    // WYCIECZKA - USTAW ZMIENNE GLOBALNE
-    trasa_global = dziecko.trasa;
-    jestem_na_trasie = 1;
 
-    int czas_wycieczki = (dziecko.trasa == 1) ? T1 : T2;
-    log_info("[DZIECKO %d] Zwiedzam z grupą i opiekunem (%d sek)...", dziecko_pid, czas_wycieczki);
-    sleep(czas_wycieczki);
+    int ret = sem_timed_wait_safe(semid_global, sem_wejscie_allowed, 10);
+    if (ret != 0) {
 
-    jestem_na_trasie = 0;
+        if (!stan_global->jaskinia_otwarta || flaga_stop_ipc) {
+        return -1; 
+        }
+
+        log_error("[ZWIEDZAJĄCY %d] TIMEOUT wejścia - przewodnik nie otworzył!", pid);
+        
+        // Zwolnij zarezerwowane miejsca na trasie
+        for (int i = 0; i < liczba_miejsc; i++) {
+            sem_signal_safe(semid_global, sem_limit_trasy);
+        }
+        return -1; 
+    }
+
+    if (!stan_global->jaskinia_otwarta || flaga_stop_ipc) {
+        log_warning("[ZWIEDZAJĄCY %d] Jaskinia zamknięta - opuszczam kolejkę i wychodzę", pid);
+        return -1;
+    }
+
+    log_info("[ZWIEDZAJĄCY %d] Wejście otwarte - (%d miejsc)", pid, liczba_miejsc);
     
-    if (flaga_ewakuacja) {
-        log_warning("[DZIECKO %d] Ewakuacja podczas wycieczki!", dziecko_pid);
-        wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
-        exit(0);
+    // REZERWUJ miejsca na kładce
+    struct sembuf op;
+
+    /* ZAJĘCIE MIEJSC */
+    op.sem_num = sem_kladka;
+    op.sem_op  = -liczba_miejsc;
+    op.sem_flg = 0;
+
+    semop(semid_global, &op, 1);
+    
+    log_info("[ZWIEDZAJĄCY %d] Zająłem %d miejsc na kładce WEJŚCIE", pid, liczba_miejsc);
+    
+    
+    // AKTUALIZUJ licznik kładki
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    if (trasa == 1) {
+        stan_global->kladka1_licznik += liczba_miejsc;
+        log_info("[ZWIEDZAJĄCY %d] Na kładce 1 WEJŚCIE: %d/%d osób", 
+                 pid, stan_global->kladka1_licznik, K);
+    } else {
+        stan_global->kladka2_licznik += liczba_miejsc;
+        log_info("[ZWIEDZAJĄCY %d] Na kładce 2 WEJŚCIE: %d/%d osób", 
+                 pid, stan_global->kladka2_licznik, K);
+    }
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    
+    if (jest_opiekunem) {
+        log_success("[OPIEKUN %d] Wszedłem na kładkę z dzieckiem kierunek WEJŚCIE", pid);
+    } else {
+        log_success("[ZWIEDZAJĄCY %d] Wszedłem na kładkę kierunek WEJŚCIE", pid);
     }
     
-    log_success("[DZIECKO %d] Wycieczka zakończona!", dziecko_pid);
+    // PRZEJŚCIE przez kładkę 
+    int czas_przejscia = losuj(800000, 1500000);
+    usleep(czas_przejscia);
     
-    // WYJŚCIE
-    int sem_wyjscie = (dziecko.trasa == 1) ? SEM_GRUPA1_WYJSCIE_KLADKA : SEM_GRUPA2_WYJSCIE_KLADKA;
+    log_info("[ZWIEDZAJĄCY %d] Przechodzę przez kładkę...", pid);
+
+    // Zejście z kładki na trasę 
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    if (trasa == 1) {
+        stan_global->kladka1_licznik -= liczba_miejsc;
+        stan_global->trasa1_licznik += liczba_miejsc; 
+        log_info("[ZWIEDZAJĄCY %d] Wszedłem na trasę 1 (na trasie: %d/%d)", 
+                 pid, stan_global->trasa1_licznik, N1);
+    } else {
+        stan_global->kladka2_licznik -= liczba_miejsc;
+        stan_global->trasa2_licznik += liczba_miejsc; 
+        log_info("[ZWIEDZAJĄCY %d] Wszedłem na trasę 2 (na trasie: %d/%d)", 
+                 pid, stan_global->trasa2_licznik, N2);
+    }
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    usleep(1000);
     
-    log_info("[DZIECKO %d] Wychodzę z jaskini razem z opiekunem", dziecko_pid);
-    sem_wait_safe(semid, sem_wyjscie);
-    sem_signal_safe(semid, SEM_POTWIERDZENIE);
+    // ZWOLNIJ miejsca na kładce
+    op.sem_op = +liczba_miejsc;
+    semop(semid_global, &op, 1);
     
-    log_success("[DZIECKO %d] Opuściłem jaskinię z opiekunem", dziecko_pid);
+    // Potwierdzenie
+    log_info("[ZWIEDZAJĄCY %d] Wysyłam %d potwierdzeń do przewodnika...", 
+             pid, liczba_miejsc);
     
-    wyrejestruj_zwiedzajacego(stan, dziecko_pid, semid);
+    for (int i = 0; i < liczba_miejsc; i++) {
+        sem_signal_safe(semid_global, sem_potw); 
+    }
+    
+    if (jest_opiekunem) {
+        log_success("[OPIEKUN %d] Zwiedzam trasę %d z dzieckiem...", pid, trasa);
+    } else {
+        log_success("[ZWIEDZAJĄCY %d] Zwiedzam trasę %d...", pid, trasa);
+    }
+
+    return 0;
+}
+
+void wyjscie_z_kladki(int trasa, pid_t pid, int jest_opiekunem) {
+    int sem_wyjscie_allowed = (trasa == 1) ? 
+        SEM_KLADKA1_WYJSCIE_ALLOWED : SEM_KLADKA2_WYJSCIE_ALLOWED;
+    int sem_kladka = (trasa == 1) ? SEM_KLADKA1 : SEM_KLADKA2;
+    int sem_potw = (trasa == 1) ? SEM_POTWIERDZENIE_WYJSCIE_TRASA1 : SEM_POTWIERDZENIE_WYJSCIE_TRASA2;
+    int sem_limit_trasy = (trasa == 1) ? SEM_TRASA1_LIMIT : SEM_TRASA2_LIMIT;
+    int liczba_miejsc = jest_opiekunem ? 2 : 1;
+    
+    if (jest_opiekunem) {
+        log_info("[OPIEKUN %d] Czekam na otwarcie WYJŚCIA (z dzieckiem = %d miejsca)...", 
+                 pid, liczba_miejsc);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Czekam na otwarcie WYJŚCIA z kładki...", pid);
+    }
+    
+    sem_wait_safe(semid_global, sem_wyjscie_allowed);
+    log_info("[ZWIEDZAJĄCY %d] Wyjście otwarte - schodzę z trasy", pid);
+    
+    // 2. REZERWUJ miejsca na kładce
+    struct sembuf op;
+
+    /* ZAJĘCIE przy wyjściu (jeśli masz) */
+    op.sem_num = sem_kladka;
+    op.sem_op  = -liczba_miejsc;
+    op.sem_flg = 0;
+
+    semop(semid_global, &op, 1);
+    
+    log_info("[ZWIEDZAJĄCY %d] Zająłem %d miejsc na kładce WYJŚCIE", pid, liczba_miejsc);
+    
+    // ZWOLNIJ semafor wyjścia
+    sem_signal_safe(semid_global, sem_wyjscie_allowed);
+    
+    // Przenieś z trasy na kładkę
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    if (trasa == 1) {
+        stan_global->trasa1_licznik -= liczba_miejsc;  
+        stan_global->kladka1_licznik += liczba_miejsc;
+        log_info("[ZWIEDZAJĄCY %d] Na kładce 1 WYJŚCIE: %d/%d osób", 
+                 pid, stan_global->kladka1_licznik, K);
+    } else {
+        stan_global->trasa2_licznik -= liczba_miejsc;  
+        stan_global->kladka2_licznik += liczba_miejsc;
+        log_info("[ZWIEDZAJĄCY %d] Na kładce 2 WYJŚCIE: %d/%d osób", 
+                 pid, stan_global->kladka2_licznik, K);
+    }
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    
+    if (jest_opiekunem) {
+        log_success("[OPIEKUN %d] Wszedłem na kładkę z dzieckiem kierunek WYJŚCIE", pid);
+    } else {
+        log_success("[ZWIEDZAJĄCY %d] Wszedłem na kładkę kierunek WYJŚCIE", pid);
+    }
+    
+    // PRZEJŚCIE przez kładkę
+    int czas_przejscia = losuj(800000, 1500000);
+    usleep(czas_przejscia);
+    
+    log_info("[ZWIEDZAJĄCY %d] Schodzę z kładki...", pid);
+    
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    if (trasa == 1) {
+        stan_global->kladka1_licznik -= liczba_miejsc; 
+    } else {
+        stan_global->kladka2_licznik -= liczba_miejsc;  
+    }
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    
+    // Małe opóźnienie na synchronizację pamięci dzielonej
+    usleep(1000);  // 1ms
+    
+    // ZWOLNIJ miejsca na kładce 
+    op.sem_op = +liczba_miejsc;
+    semop(semid_global, &op, 1);
+    
+    // Potwierdzenie
+    log_info("[ZWIEDZAJĄCY %d] Wysyłam %d potwierdzeń wyjścia...", 
+             pid, liczba_miejsc);
+    
+    for (int i = 0; i < liczba_miejsc; i++) {
+        sem_signal_safe(semid_global, sem_potw); 
+    }
+    
+    if (jest_opiekunem) {
+        log_success("[OPIEKUN %d] OPUŚCIŁEM jaskinię z dzieckiem!", pid);
+    } else {
+        log_success("[ZWIEDZAJĄCY %d] OPUŚCIŁEM jaskinię!", pid);
+    }
+
+    for (int i = 0; i < liczba_miejsc; i++) {
+    sem_signal_safe(semid_global, sem_limit_trasy);
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -250,13 +393,21 @@ int main(int argc, char *argv[]) {
     pid_t moj_pid = getpid();
     srand(moj_pid ^ time(NULL));
     
-    signal(SIGTERM, obsluga_ewakuacji); 
+    struct sigaction sa;
+    sa.sa_handler = obsluga_ewakuacji;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
     
     shmid_global = atoi(getenv("SHMID"));
     semid_global = atoi(getenv("SEMID"));
     int msgid = atoi(getenv("MSGID"));
     
-    StanJaskini *stan = podlacz_pamiec_dzielona(shmid_global); 
+    StanJaskini *stan = podlacz_pamiec_dzielona(shmid_global);
+    if (!stan) {
+        log_error("[ZWIEDZAJĄCY %d] Nie mogę podłączyć pamięci dzielonej", moj_pid);
+        _exit(1);
+    }
     stan_global = stan;
     
     if (!stan->jaskinia_otwarta) {
@@ -264,201 +415,192 @@ int main(int argc, char *argv[]) {
         odlacz_pamiec_dzielona(stan);
         return 1;
     }
-    
-    zarejestruj_zwiedzajacego(stan, moj_pid, semid_global);
-    
-    // === GENERUJ PARAMETRY ===
+
+    // GENERUJ PARAMETRY ZWIEDZAJĄCEGO
     Zwiedzajacy zw;
     zw.wiek = losuj(WIEK_MIN, WIEK_MAX);
     zw.trasa = losuj(1, 2);
     zw.czy_powrot = 0;
     zw.jest_opiekunem = 0;
-    zw.jest_dzieckiem = 0;
-    zw.pid_opiekuna = 0;
-    zw.pid_dziecka = 0;
+    zw.wiek_dziecka = 0;
+
+   // Decydujemy o statusie opiekuna PRZED rejestracją w SHM
+    int lokalna_flaga_opiekun = (zw.wiek >= WIEK_DOROSLY && losuj_szanse(SZANSA_OPIEKUN_Z_DZIECKIEM));
     
-    // Wariant 1: DOROSŁY Z DZIECKIEM (30% szans)
-    if (zw.wiek >= WIEK_DOROSLY && losuj_szanse(SZANSA_OPIEKUN_Z_DZIECKIEM)) {
+    if (zw.wiek < WIEK_TYLKO_TRASA2_DZIECKO && !lokalna_flaga_opiekun) {
+    log_warning("[DZIECKO %d] Wiek %d - muszę mieć opiekuna! Odchodzę",
+                moj_pid, zw.wiek);
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    stan->licznik_odrzuconych++;
+    sem_signal_safe(semid_global, SEM_MUTEX);
+
+    odlacz_pamiec_dzielona(stan);
+    sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+    return 1;
+    }
+    // REJESTRACJA
+    int moj_indeks = zarejestruj_zwiedzajacego(stan, moj_pid, semid_global, lokalna_flaga_opiekun);
+    if (moj_indeks == -1) {
+    odlacz_pamiec_dzielona(stan);
+    sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+    _exit(1);
+    }
+
+    // Mutex i cond dla synchronizacji z wątkiem dziecka
+    pthread_mutex_t mutex_opiekun = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t cond_opiekun = PTHREAD_COND_INITIALIZER;
+    volatile int flaga_gotowy_wejscie = 0;
+    volatile int flaga_gotowy_wyjscie = 0;
+    volatile int flaga_koniec = 0;
+
+    // Jeśli wylosowano opiekuna, twórz wątek
+    if (lokalna_flaga_opiekun) {
         zw.jest_opiekunem = 1;
-        zw.trasa = 2;  // Opiekun z dzieckiem zawsze trasa 2
+        zw.trasa = 2;
+        zw.wiek_dziecka = losuj(1, WIEK_TYLKO_TRASA2_DZIECKO - 1);
         
-        pid_t pid_dziecko = fork();
-        
-        if (pid_dziecko < 0) {
-            perror("fork dziecko");
-            log_error("[OPIEKUN %d] Nie mogę stworzyć procesu dziecka - rezygnuję z roli opiekuna", moj_pid);
-            zw.jest_opiekunem = 0;
-            zw.pid_dziecka = 0;
-            // Kontynuuj jako normalny zwiedzający
-        } else if (pid_dziecko == 0) {
-            // === PROCES DZIECKA ===
-            pid_t dziecko_pid = getpid();
-            srand(dziecko_pid ^ time(NULL));
+        log_info("[OPIEKUN %d] Jestem z dzieckiem (wiek: %d) - oboje trasa %d",
+                 moj_pid, zw.wiek_dziecka, zw.trasa);
+
+        ArgsDziecko *args = malloc(sizeof(ArgsDziecko));
+        if (args) {
+            args->wiek = zw.wiek_dziecka;
+            args->trasa = zw.trasa;
+            args->pid_opiekuna = moj_pid;
+            args->mutex_opiekun = &mutex_opiekun;
+            args->cond_opiekun = &cond_opiekun;
+            args->flaga_gotowy_wejscie = &flaga_gotowy_wejscie;
+            args->flaga_gotowy_wyjscie = &flaga_gotowy_wyjscie;
+            args->flaga_koniec = &flaga_koniec;
             
-            // Dziecko przechodzi TĘ SAMĄ trasę co opiekun
-            wycieczka_dziecka(dziecko_pid, zw.trasa, msgid, stan, semid_global);
-            
-            odlacz_pamiec_dzielona(stan);
-            exit(0);
-        } else if (pid_dziecko > 0) {
-            zw.pid_dziecka = pid_dziecko;
-            log_info("[OPIEKUN %d] Mam dziecko: PID %d (oboje trasa %d)", moj_pid, pid_dziecko, zw.trasa);
+            if (pthread_create(&zw.watek_dziecko, NULL, funkcja_watku_dziecka, args) != 0) {
+                free(args);
+                zw.jest_opiekunem = 0;
+            } else {
+                log_success("[OPIEKUN %d] Utworzono wątek dziecka (TID=%lu)",
+                            moj_pid, (unsigned long)zw.watek_dziecko);
+            }
         }
     }
     
-    // Senior >75 lat: wymuś trasę 2
-    if (zw.wiek > WIEK_TYLKO_TRASA2_SENIOR) {
-        zw.trasa = 2;
-        log_info("[ZWIEDZAJACY %d] Senior - wymuszona trasa 2", moj_pid);
+    if (zw.jest_opiekunem) {
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        stan->zwiedzajacy_jest_opiekunem[moj_indeks] = 1; 
+        sem_signal_safe(semid_global, SEM_MUTEX);
     }
     
+    if (zw.jest_opiekunem) {
+    log_info("[OPIEKUN %d] Zarejestrowano mnie jako opiekun", moj_pid);
+    }
+
+    // SENIOR >75 lat: wymuś trasę 2
+    if (zw.wiek > WIEK_TYLKO_TRASA2_SENIOR) {
+        log_info("[SENIOR %d] Senior - wymuszona trasa 2", moj_pid);
+        zw.trasa = 2;
+    }
+
     log_info("[ZWIEDZAJĄCY %d] Wiek: %d, Trasa: %d, Typ: %s",
              moj_pid, zw.wiek, zw.trasa,
-             zw.jest_opiekunem ? "OPIEKUN" : 
-             (zw.wiek < WIEK_TYLKO_TRASA2_DZIECKO ? "DZIECKO" : "DOROSŁY"));
+             zw.jest_opiekunem ? "OPIEKUN+DZIECKO(wątek)" : "ZWYKŁY");
     
-    // === KUPNO BILETU ===
+    
 kupno_biletu:
     
-    if (flaga_ewakuacja || !stan->jaskinia_otwarta) {
+    if (flaga_stop_ipc || !stan->jaskinia_otwarta) {
         log_warning("[ZWIEDZAJĄCY %d] Ewakuacja/zamknięcie", moj_pid);
         goto wyjscie;
     }
     
+    // KUPNO BILETU
     if (!kup_bilet(&zw, msgid, moj_pid)) {
+        if(zw.jest_opiekunem) {
+            // Anuluj wątek dziecka
+            pthread_mutex_lock(&mutex_opiekun);
+            flaga_koniec = 1;
+            pthread_cond_broadcast(&cond_opiekun);
+            pthread_mutex_unlock(&mutex_opiekun);
+        }
+        log_warning("[ZWIEDZAJĄCY %d] Nie dostałem biletu - odchodzę", moj_pid);
         goto wyjscie;
     }
-    
-    if (zw.jest_opiekunem && zw.pid_dziecka > 0) {
-    int timeout = 10;
-    int dziecko_gotowe = 0;
-    
-    for (int t = 0; t < timeout * 2; t++) {
-        usleep(500000); // 0.5 sekundy
-        
-        sem_wait_safe(semid_global, SEM_MUTEX);
-        for (int j = 0; j < MAX_ZWIEDZAJACYCH; j++) {
-            if (stan_global->zwiedzajacy_pids[j] == zw.pid_dziecka) {
-                dziecko_gotowe = 1;
-                break;
-            }
-        }
-        sem_signal_safe(semid_global, SEM_MUTEX);
-        
-        if (dziecko_gotowe) {
-            break;
-        }
-    }
-    
-    if (!dziecko_gotowe) {
-        log_warning("[OPIEKUN %d] Timeout - dziecko nie kupiło biletu na czas", moj_pid);
-    }
-    
-    // ATOMOWO dodaj parę do kolejki
-    if (!dolacz_pare_do_kolejki(zw.trasa, zw.pid_dziecka, moj_pid, stan, semid_global)) {
-        log_error("[OPIEKUN %d] Nie można dołączyć do kolejki!", moj_pid);
-        goto wyjscie;
-    }
-    
-    // Obudź przewodnika
-    int sem_kolejka = (zw.trasa == 1) ? 
-        SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
-    sem_signal_safe(semid_global, sem_kolejka);
-    
-    log_info("[OPIEKUN %d] Czekam w kolejce z dzieckiem PID %d na trasę %d...", 
-             moj_pid, zw.pid_dziecka, zw.trasa);
-    } else {
-    // Normalnie - pojedyncza osoba
+
+    // DOŁĄCZ DO KOLEJKI
     dolacz_do_kolejki(zw.trasa, moj_pid, stan, semid_global);
-    int sem_kolejka = (zw.trasa == 1) ? 
-        SEM_KOLEJKA1_NIEPUSTA : SEM_KOLEJKA2_NIEPUSTA;
-    sem_signal_safe(semid_global, sem_kolejka);
     
-    log_info("[ZWIEDZAJĄCY %d] Czekam w kolejce na trasę %d...", moj_pid, zw.trasa);
-}
+    if (zw.jest_opiekunem) {
+        log_info("[OPIEKUN %d] Czekam w kolejce z dzieckiem na trasę %d...",
+                 moj_pid, zw.trasa);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Czekam w kolejce na trasę %d...", moj_pid, zw.trasa);
+    }
     
-    // Blokuj tutaj aż przewodnik zbierze grupę i wyśle sygnał
+    // CZEKAJ NA PRZEWODNIKA
     int sem_gotowa = (zw.trasa == 1) ? SEM_PRZEWODNIK1_READY : SEM_PRZEWODNIK2_READY;
+    
+    log_info("[ZWIEDZAJĄCY %d] Czekam aż przewodnik zbierze grupę...", moj_pid);
     sem_wait_safe(semid_global, sem_gotowa);
     
-    // Sprawdź czy jaskinia otwarta
-    if (!stan->jaskinia_otwarta || flaga_ewakuacja) {
+    if (!stan->jaskinia_otwarta || flaga_stop_ipc) {
         log_warning("[ZWIEDZAJĄCY %d] Jaskinia zamknięta - opuszczam kolejkę i wychodzę", moj_pid);
         goto wyjscie;
     }
     
     log_success("[ZWIEDZAJĄCY %d] Przewodnik zabrał mnie w trasę!", moj_pid);
     
-    // === WEJŚCIE NA KŁADKĘ ===
-    int sem_wejscie = (zw.trasa == 1) ? SEM_GRUPA1_WEJSCIE_KLADKA : SEM_GRUPA2_WEJSCIE_KLADKA;
-    
-    log_info("[ZWIEDZAJĄCY %d] Czekam na sygnał wejścia na kładkę...", moj_pid);
-    sem_wait_safe(semid_global, sem_wejscie);
-    
+    if (wejscie_na_kladke(zw.trasa, moj_pid, zw.jest_opiekunem) != 0) {
+    log_warning("[ZWIEDZAJĄCY %d] Nie udało się wejść na kładkę - jaskinia zamknięta. Wychodzę", moj_pid);
+    goto wyjscie; 
+    }
+
+    // Sygnalizuj dziecku: "jesteśmy na trasie"
     if (zw.jest_opiekunem) {
-        log_info("[OPIEKUN %d] Wchodzę na kładkę z dzieckiem", moj_pid);
-    } else {
-        log_info("[ZWIEDZAJĄCY %d] Wchodzę na kładkę", moj_pid);
+        pthread_mutex_lock(&mutex_opiekun);
+        flaga_gotowy_wejscie = 1;
+        pthread_cond_broadcast(&cond_opiekun);
+        pthread_mutex_unlock(&mutex_opiekun);
+        
+        log_info("[OPIEKUN %d] Dałem sygnał dziecku: jesteśmy na trasie!", moj_pid);
     }
     
-    // Potwierdzenie że jestem na kładce
-    sem_signal_safe(semid_global, SEM_POTWIERDZENIE);
-    
-    // === WYCIECZKA (PASYWNE CZEKANIE) ===
-    int czas_wycieczki = (zw.trasa == 1) ? T1 : T2;
-
-    trasa_global = zw.trasa;  // <-- Ustaw globalną
+    // WYCIECZKA
+    trasa_global = zw.trasa;
     jestem_na_trasie = 1;
     
+    int czas_wycieczki = (zw.trasa == 1) ? T1 : T2;
+    
     if (zw.jest_opiekunem) {
-        log_info("[OPIEKUN %d] Zwiedzam trasę %d z dzieckiem (%d sek)...", 
+        log_info("[OPIEKUN %d] Zwiedzam trasę %d z dzieckiem (%d sek) ═══",
                  moj_pid, zw.trasa, czas_wycieczki);
     } else {
-        log_info("[ZWIEDZAJĄCY %d] Zwiedzam trasę %d (%d sek)...", 
+        log_info("[ZWIEDZAJĄCY %d] Zwiedzam trasę %d (%d sek) ═══",
                  moj_pid, zw.trasa, czas_wycieczki);
     }
     
     sleep(czas_wycieczki);
-
-    jestem_na_trasie = 0; 
+    jestem_na_trasie = 0;
     
-    if (flaga_ewakuacja) {
-        log_warning("[ZWIEDZAJĄCY %d] Ewakuacja po wycieczce - zmniejszam licznik!", moj_pid);
-        
-        sem_wait_safe(semid_global, SEM_MUTEX);
-        if (trasa_global == 1) {
-            if (stan_global->trasa1_licznik > 0) {
-                stan_global->trasa1_licznik--;
-            }
-        } else if (trasa_global == 2) {
-            if (stan_global->trasa2_licznik > 0) {
-                stan_global->trasa2_licznik--;
-            }
-        }
-        sem_signal_safe(semid_global, SEM_MUTEX);
-        
+    if (flaga_stop_ipc) {
+        log_warning("[ZWIEDZAJĄCY %d] Ewakuacja po wycieczce!", moj_pid);
         goto wyjscie;
     }
     
     log_success("[ZWIEDZAJĄCY %d] Wycieczka zakończona!", moj_pid);
+
+    // WYJŚCIE: TRASA → KŁADKA → NA ZEWNĄTRZ
+    wyjscie_z_kladki(zw.trasa, moj_pid, zw.jest_opiekunem);
     
-    // === WYJŚCIE Z JASKINI ===
-    int sem_wyjscie = (zw.trasa == 1) ? SEM_GRUPA1_WYJSCIE_KLADKA : SEM_GRUPA2_WYJSCIE_KLADKA;
-    
-    log_info("[ZWIEDZAJĄCY %d] Czekam na sygnał wyjścia...", moj_pid);
-    sem_wait_safe(semid_global, sem_wyjscie);
-    
+    // Sygnalizuj dziecku: "wyszliśmy"
     if (zw.jest_opiekunem) {
-        log_info("[OPIEKUN %d] Wychodzę przez kładkę z dzieckiem", moj_pid);
-    } else {
-        log_info("[ZWIEDZAJĄCY %d] Wychodzę przez kładkę", moj_pid);
+        pthread_mutex_lock(&mutex_opiekun);
+        flaga_gotowy_wyjscie = 1;
+        pthread_cond_broadcast(&cond_opiekun);
+        pthread_mutex_unlock(&mutex_opiekun);
+        
+        log_info("[OPIEKUN %d] Dałem sygnał dziecku: wyszliśmy!", moj_pid);
     }
     
-    sem_signal_safe(semid_global, SEM_POTWIERDZENIE);
-    
-    log_success("[ZWIEDZAJĄCY %d] Opuściłem jaskinię", moj_pid);
-    
-    // === POWTÓRKA (10% szans) - ALE NIE DLA OPIEKUNÓW Z DZIEĆMI ===
+
+    // POWTÓRKA (10% szans) - NIE DLA OPIEKUNÓW
     if (!zw.czy_powrot && !zw.jest_opiekunem && losuj_szanse(SZANSA_POWROT)) {
         if (!stan->jaskinia_otwarta) {
             log_info("[ZWIEDZAJĄCY %d] Chciałem powtórzyć, ale zamknięte", moj_pid);
@@ -479,23 +621,35 @@ kupno_biletu:
         goto kupno_biletu;
     }
     
+
+    // ZAKOŃCZENIE
+    
 wyjscie:
     if (zw.jest_opiekunem) {
-        log_info("[OPIEKUN %d] Opuszczam jaskinię i czekam na dziecko...", moj_pid);
-    } else {
-        log_info("[ZWIEDZAJĄCY %d] Opuszczam jaskinię (koniec)", moj_pid);
-    }
-    
-    // Jeśli opiekun - poczekaj na dziecko (wychodzą RAZEM)
-    if (zw.jest_opiekunem && zw.pid_dziecka > 0) {
-        log_info("[OPIEKUN %d] Czekam na dziecko PID %d...", moj_pid, zw.pid_dziecka);
-        int status;
-        waitpid(zw.pid_dziecka, &status, 0);
-        log_success("[OPIEKUN %d] Dziecko wyszło - wychodzimy razem!", moj_pid);
+        log_info("[OPIEKUN %d] Czekam na zakończenie wątku dziecka...", moj_pid);
+        
+        pthread_mutex_lock(&mutex_opiekun);
+        flaga_koniec = 1;
+        pthread_cond_broadcast(&cond_opiekun);
+        pthread_mutex_unlock(&mutex_opiekun);
+        pthread_join(zw.watek_dziecko, NULL);
+        
+        log_success("[OPIEKUN %d] Dziecko-wątek zakończone - wychodzimy razem!", moj_pid);
+        
+        pthread_mutex_destroy(&mutex_opiekun);
+        pthread_cond_destroy(&cond_opiekun);
+        
+        // ═══ WYREJESTRUJ OPIEKUNA Z TABLICY ═══
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        stan->zwiedzajacy_jest_opiekunem[moj_indeks] = 0;
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
+        log_info("[OPIEKUN %d] Wyrejestrowano jako opiekun", moj_pid);
     }
     
     wyrejestruj_zwiedzajacego(stan, moj_pid, semid_global);
     odlacz_pamiec_dzielona(stan);
-    
+    sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+
     return 0;
 }
