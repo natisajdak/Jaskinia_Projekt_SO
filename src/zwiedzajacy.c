@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
@@ -15,31 +16,85 @@
 #include "../include/ipc.h"
 #include "../include/utils.h"
 
-// Flaga ewakuacji
-volatile sig_atomic_t flaga_ewakuacja = 0;
+// GLOBALNE ZMIENNE I FLAGI
 int shmid_global = -1;
 int semid_global = -1;
 StanJaskini *stan_global = NULL;
 int trasa_global = 0;
 volatile sig_atomic_t jestem_na_trasie = 0;
 
-// Obsługa sygnału ewakuacji
 void obsluga_ewakuacji(int sig) {
     (void)sig;
-    flaga_ewakuacja = 1;
+    flaga_stop_ipc = 1;
 }
 
-// Parametry zwiedzającego
+// STRUKTURY
 typedef struct {
     int wiek;
     int trasa;
     int czy_powrot;
     
     int jest_opiekunem;
-    int jest_dzieckiem;
-    pid_t pid_opiekuna;
-    pid_t pid_dziecka;
+    int wiek_dziecka;
+    pthread_t watek_dziecko;
 } Zwiedzajacy;
+
+typedef struct {
+    int wiek;
+    int trasa;
+    pid_t pid_opiekuna;
+    pthread_mutex_t *mutex_opiekun;
+    pthread_cond_t *cond_opiekun;
+    volatile int *flaga_gotowy_wejscie;
+    volatile int *flaga_gotowy_wyjscie;
+    volatile int *flaga_koniec;
+} ArgsDziecko;
+
+void* funkcja_watku_dziecka(void* arg) {
+    ArgsDziecko *a = (ArgsDziecko*)arg;
+    pthread_t tid = pthread_self();
+    
+    log_info("[DZIECKO TID %lu] Wiek: %d, Opiekun PID: %d, Trasa: %d", 
+             tid, a->wiek, a->pid_opiekuna, a->trasa );
+    
+    log_info("[DZIECKO TID %lu] Czekam na sygnał opiekuna (wejście)...", tid);
+    
+    // CZEKAJ NA SYGNAŁ OPIEKUNA: wchodzimy na trasę
+    pthread_mutex_lock(a->mutex_opiekun);
+    while (*(a->flaga_gotowy_wejscie) == 0 && *(a->flaga_koniec) == 0) {
+        pthread_cond_wait(a->cond_opiekun, a->mutex_opiekun);
+    }
+    pthread_mutex_unlock(a->mutex_opiekun);
+    
+    if (*(a->flaga_koniec)) {
+        log_warning("[DZIECKO TID %lu] Wycieczka anulowana wychodzę z opiekunem", tid);
+        free(a);
+        pthread_exit(NULL);
+    }
+    
+    log_success("[DZIECKO TID %lu] Otrzymałem sygnał - jesteśmy na trasie!", tid);
+    
+    // WYCIECZKA (razem z opiekunem) 
+    int czas_wycieczki = (a->trasa == 1) ? T1 : T2;
+    log_info("[DZIECKO TID %lu] Zwiedzam trasę %d z opiekunem (%d sek)...", 
+             tid, a->trasa, czas_wycieczki);
+    
+    sleep(czas_wycieczki);
+    
+    log_info("[DZIECKO TID %lu] Czekam na sygnał opiekuna (wyjście)...", tid);
+    
+    // CZEKAJ NA SYGNAŁ OPIEKUNA: "wychodzimy" 
+    pthread_mutex_lock(a->mutex_opiekun);
+    while (*(a->flaga_gotowy_wyjscie) == 0 && *(a->flaga_koniec) == 0) {
+        pthread_cond_wait(a->cond_opiekun, a->mutex_opiekun);
+    }
+    pthread_mutex_unlock(a->mutex_opiekun);
+    
+    log_success("[DZIECKO TID %lu] Opuściłem jaskinię z opiekunem!", tid);
+    
+    free(a);
+    pthread_exit(NULL);
+}
 
 int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     MsgBilet prosba;
@@ -190,7 +245,7 @@ int main(int argc, char *argv[]) {
     semid_global = atoi(getenv("SEMID"));
     int msgid = atoi(getenv("MSGID"));
     
-    StanJaskini *stan = podlacz_pamiec_dzielona(shmid_global);  // Teraz OK
+    StanJaskini *stan = podlacz_pamiec_dzielona(shmid_global); 
     stan_global = stan;
     
     if (!stan->jaskinia_otwarta) {
@@ -264,28 +319,29 @@ kupno_biletu:
     }
     
     if (zw.jest_opiekunem && zw.pid_dziecka > 0) {
-        int timeout = 5; // 5 sekund max
-        int dziecko_gotowe = 0;
+    int timeout = 10;
+    int dziecko_gotowe = 0;
+    
+    for (int t = 0; t < timeout * 2; t++) {
+        usleep(500000); // 0.5 sekundy
         
-        for (int t = 0; t < timeout * 2; t++) {
-            usleep(500000); // 0.5 sekundy
-            
-            // Sprawdź czy dziecko już w kolejce
-            sem_wait_safe(semid_global, SEM_MUTEX);
-            int kolejka_size = (zw.trasa == 1) ? 
-                stan_global->kolejka_trasa1_koniec : 
-                stan_global->kolejka_trasa2_koniec;
-            sem_signal_safe(semid_global, SEM_MUTEX);
-            
-            if (kolejka_size > 0) {
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        for (int j = 0; j < MAX_ZWIEDZAJACYCH; j++) {
+            if (stan_global->zwiedzajacy_pids[j] == zw.pid_dziecka) {
                 dziecko_gotowe = 1;
                 break;
             }
         }
+        sem_signal_safe(semid_global, SEM_MUTEX);
         
-        if (!dziecko_gotowe) {
-            log_warning("[OPIEKUN %d] Timeout - dziecko nie kupiło biletu na czas", moj_pid);
+        if (dziecko_gotowe) {
+            break;
         }
+    }
+    
+    if (!dziecko_gotowe) {
+        log_warning("[OPIEKUN %d] Timeout - dziecko nie kupiło biletu na czas", moj_pid);
+    }
     
     // ATOMOWO dodaj parę do kolejki
     if (!dolacz_pare_do_kolejki(zw.trasa, zw.pid_dziecka, moj_pid, stan, semid_global)) {
