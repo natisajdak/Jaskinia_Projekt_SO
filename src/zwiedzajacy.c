@@ -99,59 +99,70 @@ void* funkcja_watku_dziecka(void* arg) {
 int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     MsgBilet prosba;
     
-    if (zw->czy_powrot) {
-        prosba.mtype = MSG_BILET_POWROT;
-    } else {
-        prosba.mtype = MSG_BILET_ZWYKLY;
-    }
-    
+    prosba.mtype = zw->czy_powrot ? MSG_BILET_POWROT : MSG_BILET_ZWYKLY;
     prosba.zwiedzajacy_pid = moj_pid;
     prosba.wiek = zw->wiek;
     prosba.trasa = zw->trasa;
     prosba.czy_powrot = zw->czy_powrot;
     prosba.jest_opiekunem = zw->jest_opiekunem;
-    prosba.pid_opiekuna = zw->pid_opiekuna;
-    prosba.pid_dziecka = zw->pid_dziecka;
+    prosba.wiek_dziecka = zw->wiek_dziecka;
     prosba.timestamp = time(NULL);
     
     const char *typ_kolejki = zw->czy_powrot ? "PRIORYTETOWA (powtórka)" : "ZWYKŁA";
     
-    log_info("[ZWIEDZAJĄCY %d] Proszę o bilet (trasa %d, kolejka: %s)...", 
-             moj_pid, zw->trasa, typ_kolejki);
+    if (zw->jest_opiekunem) {
+        log_info("[OPIEKUN %d] Proszę o bilet (trasa %d, kolejka: %s, dziecko: %d lat)",
+                 moj_pid, zw->trasa, typ_kolejki, zw->wiek_dziecka);
+    } else {
+        log_info("[ZWIEDZAJĄCY %d] Proszę o bilet (trasa %d, kolejka: %s)",
+                 moj_pid, zw->trasa, typ_kolejki);
+    }
     
+    // ═══ Czekaj na slot w kolejce komunikatów ═══
+    log_info("[ZWIEDZAJĄCY %d] Czekam na wolny slot w kolejce komunikatów...", 
+             moj_pid);
+    
+    if (sem_timed_wait_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS, 10) != 0) {
+        log_error("[ZWIEDZAJĄCY %d] Timeout oczekiwania na slot w kolejce!", moj_pid);
+        return 0;
+    }
+    
+    log_info("[ZWIEDZAJĄCY %d] Mam slot - wysyłam prośbę", moj_pid);
+    
+    // ═══ BLOKUJĄCY msgsnd ═══
     if (msgsnd(msgid, &prosba, sizeof(MsgBilet) - sizeof(long), 0) < 0) {
-        perror("msgsnd");
+        perror("[ZWIEDZAJĄCY] msgsnd");
+        sem_signal_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS);  // Zwolnij slot
         return 0;
     }
     
+    log_info("[ZWIEDZAJĄCY %d] Prośba wysłana - czekam na odpowiedź kasjera...", moj_pid);
+
+    // ═══ BLOKUJĄCY msgrcv (czeka na odpowiedź kasjera) ═══
     MsgBilet odpowiedz;
-    int otrzymano = 0;
-    time_t start_wait = time(NULL);
+    ssize_t ret = msgrcv(msgid, &odpowiedz, sizeof(MsgBilet) - sizeof(long),
+                         moj_pid, 0);  // BLOKUJE
     
-    while (!otrzymano && difftime(time(NULL), start_wait) < 5.0) {
-        ssize_t ret = msgrcv(msgid, &odpowiedz, sizeof(MsgBilet) - sizeof(long),
-                             moj_pid, IPC_NOWAIT);
-        
-        if (ret > 0) {
-            otrzymano = 1;
-            break;
-        } else if (errno == ENOMSG) {
-            usleep(100000);
-            continue;
+    if (ret < 0) {
+        if (errno == EINTR) {
+            log_warning("[ZWIEDZAJĄCY %d] Przerwano oczekiwanie (sygnał)", moj_pid);
+        } else if (errno == EIDRM) {
+            log_warning("[ZWIEDZAJĄCY %d] Kolejka usunięta", moj_pid);
         } else {
-            perror("msgrcv");
-            return 0;
+            perror("[ZWIEDZAJĄCY] msgrcv");
         }
-    }
-    
-    if (!otrzymano) {
-        log_error("[ZWIEDZAJĄCY %d] Timeout - kasjer nie odpowiedział", moj_pid);
         return 0;
     }
     
+    // ═══ SPRAWDŹ ODPOWIEDŹ ═══
     if (!odpowiedz.bilet_wydany) {
-        log_error("[ZWIEDZAJĄCY %d] Odmowa biletu: %s",
+        log_error("[ZWIEDZAJĄCY %d] Odmowa biletu: %s", 
                   moj_pid, odpowiedz.powod_odmowy);
+        
+        sem_wait_safe(semid_global, SEM_MUTEX);
+        stan_global->licznik_odrzuconych++;
+        sem_signal_safe(semid_global, SEM_MUTEX);
+        
         return 0;
     }
     
