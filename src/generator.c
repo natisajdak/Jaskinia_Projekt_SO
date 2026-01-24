@@ -20,10 +20,26 @@ void obsluga_sigterm(int sig) {
     zatrzymaj = 1;
 }
 
+void obsluga_sigchld(int sig) {
+    (void)sig;
+    int saved_errno = errno;
+    
+    while (waitpid(-1, NULL, WNOHANG) > 0) {
+    }
+    
+    errno = saved_errno;
+}
+
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     
+    struct sigaction sa_chld;
+    sa_chld.sa_handler = obsluga_sigchld;  
+    sigemptyset(&sa_chld.sa_mask);
+    sa_chld.sa_flags = SA_RESTART | SA_NOCLDSTOP; 
+    sigaction(SIGCHLD, &sa_chld, NULL);
+
     pid_t moj_pid = getpid();
     srand(time(NULL) ^ moj_pid);
     
@@ -31,7 +47,6 @@ int main(int argc, char *argv[]) {
     
     signal(SIGTERM, obsluga_sigterm);
     signal(SIGINT, obsluga_sigterm);
-    signal(SIGCHLD, SIG_DFL);  // Unikaj zombie
     
     int shmid = atoi(getenv("SHMID"));
     int semid = atoi(getenv("SEMID"));
@@ -60,7 +75,6 @@ int main(int argc, char *argv[]) {
         int delay = losuj(GENERATOR_MIN_DELAY, GENERATOR_MAX_DELAY);
         sleep(delay);
         
-        // POPRAWKA 3: Sprawdź czas PO sleep
         int uplynelo = (int)difftime(time(NULL), start);
         if (uplynelo >= CZAS_OTWARCIA_SEK) {
             log_info("[GENERATOR] Upłynął czas otwarcia - przestaję generować");
@@ -89,7 +103,6 @@ int main(int argc, char *argv[]) {
         blad_fork_count = 0;
 
         if (pid_zwiedzajacy == 0) {
-            // POPRAWKA 1: _exit zamiast exit
             execl("./bin/zwiedzajacy", "zwiedzajacy", NULL);
             perror("execl zwiedzajacy");
             _exit(1);
@@ -108,13 +121,43 @@ int main(int argc, char *argv[]) {
                         "Zwiedzający #%d | PID=%d | Czas=%ds od otwarcia",
                         total, pid_zwiedzajacy, uplynelo);
         }
+
     }
     
-    int status;
-    while (waitpid(-1, &status, WNOHANG) > 0) {
-        // Zbierane w tle
-    }
+    log_info("[GENERATOR] Kończę generowanie - zbieram pozostałe procesy...");
+        
+        int zebrano = 0;
+        int timeout = 10; 
+        time_t cleanup_start = time(NULL);
+        
+        while (difftime(time(NULL), cleanup_start) < timeout) {
+            pid_t pid = waitpid(-1, NULL, WNOHANG);
+            if (pid > 0) {
+                zebrano++;
+            } else if (pid == 0) {
+                usleep(100000);  
+            } else {
+                break;
+            }
+        }
+        
+        if (zebrano > 0) {
+            log_info("[GENERATOR] Zebrano %d procesów zombie podczas cleanup", zebrano);
+        }
     
+    log_info("[GENERATOR] Kończę generowanie - czekam na wszystkie dzieci...");
+
+    log_info("[GENERATOR] Oczekiwanie na zakończenie %d procesów zwiedzających...", licznik_lokalny);
+    
+    for (int i = 0; i < licznik_lokalny; i++) {
+        sem_wait_safe(semid, SEM_ZAKONCZENI); 
+    }
+
+    while (wait(NULL) > 0); 
+
+    log_success("[GENERATOR] Wszystkie procesy zakończone pomyślnie.");
+    
+    // PODSUMOWANIE
     sem_wait_safe(semid, SEM_MUTEX);
     int total_wygenerowanych = stan->licznik_wygenerowanych;
     sem_signal_safe(semid, SEM_MUTEX);
@@ -125,7 +168,8 @@ int main(int argc, char *argv[]) {
     printf("║      PODSUMOWANIE GENERATORA          ║\n");
     printf("╚═══════════════════════════════════════╝\n");
     printf(COLOR_RESET);
-    printf("Wygenerowano zwiedzających: %d\n", total_wygenerowanych);
+    printf(COLOR_GREEN "Wygenerowano zwiedzających: %d" COLOR_RESET "\n", total_wygenerowanych);
+    printf(COLOR_GREEN "Zakończono poprawnie:       %d" COLOR_RESET "\n", stan->licznik_zakonczonych);
     printf("Czas działania:             %d sekund\n", (int)difftime(time(NULL), start));
     if (total_wygenerowanych > 0) {
         printf("Średnia częstotliwość:      %.1f sek/osoba\n", 
