@@ -28,11 +28,11 @@
 
 // === GODZINY OTWARCIA JASKINI (format 24h) ===
 #define TP 10
-#define TK 18
+#define TK 16
 
 // Przyspieszenie symulacji
 // 240 = 4 minuty rzeczywiste = 1 sekunda symulacji (8h = 2 minuty)
-#define PRZYSPIESZENIE 960
+#define PRZYSPIESZENIE 480
 #define CZAS_OTWARCIA_SEK ((TK - TP) * 3600 / PRZYSPIESZENIE)  // Ile sekund symulacji trwa dzień pracy              
 
 // === PARAMETRY SYMULACJI ===
@@ -40,8 +40,8 @@
 #define WIEK_DOROSLY 18             // Od tego wieku można być opiekunem
 
 // Opóźnienia (sekundy)
-#define GENERATOR_MIN_DELAY 1
-#define GENERATOR_MAX_DELAY 2
+#define GENERATOR_MIN_DELAY 0
+#define GENERATOR_MAX_DELAY 1
 
 // Prawdopodobieństwa (%)
 #define SZANSA_POWROT 10
@@ -93,6 +93,7 @@ enum {
 
     SEM_POTWIERDZENIE_WEJSCIE_TRASA2,
     SEM_POTWIERDZENIE_WYJSCIE_TRASA2,
+    SEM_ZAKONCZENI,
     SEM_WOLNE_SLOTY_ZWIEDZAJACYCH,
 
     NUM_SEMS
@@ -104,6 +105,7 @@ enum {
 #define LOG_TRASA1 "logs/trasa1.txt"
 #define LOG_TRASA2 "logs/trasa2.txt"
 #define LOG_SYMULACJA "logs/symulacja.log"
+#define LOG_GENERATOR "logs/generator.txt"
 
 // === KOLORY TERMINALA ===
 

@@ -170,6 +170,9 @@ void inicjalizuj_semafory(int semid) {
     semctl(semid, SEM_POTWIERDZENIE_WYJSCIE_TRASA2, SETVAL, arg);
     log_info("Semafor SEM_POTWIERDZENIE_WYJSCIE_TRASA2 = 0 ");
 
+    arg.val = 0;
+    semctl(semid, SEM_ZAKONCZENI, SETVAL, arg);
+
     semctl(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH, SETVAL, MAX_ZWIEDZAJACYCH_TABLICA);
     
     log_success("Wszystkie semafory zainicjalizowane (%d semaforów)", NUM_SEMS);
@@ -340,7 +343,7 @@ void wyrejestruj_zwiedzajacego(StanJaskini *stan, int indeks, int semid) {
     
     if (stan->zwiedzajacy_pids[indeks] != 0) {
         stan->zwiedzajacy_pids[indeks] = 0;
-        stan->zwiedzajacy_jest_opiekunem[indeks] = 0; // Czyścimy też cechę!
+        stan->zwiedzajacy_jest_opiekunem[indeks] = 0; 
         stan->liczba_aktywnych--;
         DEBUG_PRINT("Zwiedzający wyrejestrowany. Slot %d zwolniony (pozostało aktywnych: %d)", 
                     indeks, stan->liczba_aktywnych);

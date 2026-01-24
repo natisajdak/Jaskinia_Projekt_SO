@@ -36,6 +36,9 @@ typedef struct {
     // Licznik wszystkich wygenerowanych zwiedzających
     int licznik_wygenerowanych;  // Inkrementowany przez generator
     int licznik_odrzuconych;     // Odmowy biletu
+    int licznik_zakonczonych;
+    int liczba_wejsc; // Łączna liczba osób (unikalnych), które weszły
+    int liczba_wyjsc; // Łączna liczba osób (unikalnych), które opuściły system
     
     // Grupy aktywne
     int grupa1_aktywna;
