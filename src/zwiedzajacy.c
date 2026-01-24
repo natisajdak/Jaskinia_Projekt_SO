@@ -220,7 +220,6 @@ int wejscie_na_kladke(int trasa, pid_t pid, int jest_opiekunem) {
     // REZERWUJ miejsca na kładce
     struct sembuf op;
 
-    /* ZAJĘCIE MIEJSC */
     op.sem_num = sem_kladka;
     op.sem_op  = -liczba_miejsc;
     op.sem_flg = 0;
@@ -313,7 +312,6 @@ void wyjscie_z_kladki(int trasa, pid_t pid, int jest_opiekunem) {
     // 2. REZERWUJ miejsca na kładce
     struct sembuf op;
 
-    /* ZAJĘCIE przy wyjściu (jeśli masz) */
     op.sem_num = sem_kladka;
     op.sem_op  = -liczba_miejsc;
     op.sem_flg = 0;
@@ -362,7 +360,7 @@ void wyjscie_z_kladki(int trasa, pid_t pid, int jest_opiekunem) {
     
     // Małe opóźnienie na synchronizację pamięci dzielonej
     usleep(1000);  // 1ms
-    
+
     // ZWOLNIJ miejsca na kładce 
     op.sem_op = +liczba_miejsc;
     semop(semid_global, &op, 1);
@@ -432,8 +430,9 @@ int main(int argc, char *argv[]) {
                 moj_pid, zw.wiek);
     sem_wait_safe(semid_global, SEM_MUTEX);
     stan->licznik_odrzuconych++;
+    stan->licznik_zakonczonych++;
     sem_signal_safe(semid_global, SEM_MUTEX);
-
+    sem_signal_safe(semid_global, SEM_ZAKONCZENI);
     odlacz_pamiec_dzielona(stan);
     sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
     return 1;
@@ -441,6 +440,10 @@ int main(int argc, char *argv[]) {
     // REJESTRACJA
     int moj_indeks = zarejestruj_zwiedzajacego(stan, moj_pid, semid_global, lokalna_flaga_opiekun);
     if (moj_indeks == -1) {
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    stan->licznik_zakonczonych++; 
+    sem_signal_safe(semid_global, SEM_MUTEX);
+    sem_signal_safe(semid_global, SEM_ZAKONCZENI);
     odlacz_pamiec_dzielona(stan);
     sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
     _exit(1);
@@ -561,7 +564,11 @@ kupno_biletu:
         
         log_info("[OPIEKUN %d] Dałem sygnał dziecku: jesteśmy na trasie!", moj_pid);
     }
-    
+
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    stan_global->liczba_wejsc++;
+    sem_signal_safe(semid_global, SEM_MUTEX);
+
     // WYCIECZKA
     trasa_global = zw.trasa;
     jestem_na_trasie = 1;
@@ -588,6 +595,10 @@ kupno_biletu:
 
     // WYJŚCIE: TRASA → KŁADKA → NA ZEWNĄTRZ
     wyjscie_z_kladki(zw.trasa, moj_pid, zw.jest_opiekunem);
+
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    stan_global->liczba_wyjsc++;
+    sem_signal_safe(semid_global, SEM_MUTEX);
     
     // Sygnalizuj dziecku: "wyszliśmy"
     if (zw.jest_opiekunem) {
@@ -599,7 +610,6 @@ kupno_biletu:
         log_info("[OPIEKUN %d] Dałem sygnał dziecku: wyszliśmy!", moj_pid);
     }
     
-
     // POWTÓRKA (10% szans) - NIE DLA OPIEKUNÓW
     if (!zw.czy_powrot && !zw.jest_opiekunem && losuj_szanse(SZANSA_POWROT)) {
         if (!stan->jaskinia_otwarta) {
@@ -622,8 +632,7 @@ kupno_biletu:
     }
     
 
-    // ZAKOŃCZENIE
-    
+    // ZAKOŃCZENIE 
 wyjscie:
     if (zw.jest_opiekunem) {
         log_info("[OPIEKUN %d] Czekam na zakończenie wątku dziecka...", moj_pid);
@@ -646,9 +655,14 @@ wyjscie:
         
         log_info("[OPIEKUN %d] Wyrejestrowano jako opiekun", moj_pid);
     }
+
+    sem_wait_safe(semid_global, SEM_MUTEX);
+    stan->licznik_zakonczonych++; 
+    sem_signal_safe(semid_global, SEM_MUTEX);
     
     wyrejestruj_zwiedzajacego(stan, moj_pid, semid_global);
     odlacz_pamiec_dzielona(stan);
+    sem_signal_safe(semid_global, SEM_ZAKONCZENI);
     sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
 
     return 0;

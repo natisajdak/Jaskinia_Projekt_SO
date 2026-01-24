@@ -345,7 +345,6 @@ int main(int argc, char *argv[]) {
     log_success("Uruchomiono strażnika (PID %d)", pid_straznik);
     sleep(2);
     
-    // POPRAWKA 1: Uruchom GENERATOR (zamiast pętli for)
     pid_t pid_generator = fork();
     if (pid_generator == 0) {
         execl("./bin/generator", "generator", NULL);
@@ -429,6 +428,7 @@ int main(int argc, char *argv[]) {
     printf(COLOR_BOLD "PODSUMOWANIE:\n" COLOR_RESET);
     printf("─────────────────────────────────────────────\n");
     printf("Wygenerowano:         %d zwiedzających\n", stan_global->licznik_wygenerowanych);
+    printf("Zakończono poprawnie: %d \n", stan_global->licznik_zakonczonych);
     printf("Sprzedane bilety:     %d\n", stan_global->bilety_sprzedane);
     printf("  ├─ Trasa 1:         %d\n", stan_global->bilety_trasa1);
     printf("  ├─ Trasa 2:         %d\n", stan_global->bilety_trasa2);
@@ -437,6 +437,12 @@ int main(int argc, char *argv[]) {
     printf("Czas trwania:         %d sekund\n", CZAS_SYMULACJI);
     printf("─────────────────────────────────────────────\n");
     printf("\n");
+
+    if(stan_global->liczba_wejsc == stan_global->liczba_wyjsc){
+        log_success("Brak zombie — wszyscy wyszli z jaskini\n", stan_global->liczba_wejsc);
+    } else{
+            log_error("NIESPÓJNOŚĆ: wejścia(%d), wyjścia(%d)", stan_global->liczba_wejsc, stan_global->liczba_wyjsc);
+    }
     
     printf(COLOR_GREEN "Logi zapisane w katalogu: logs/\n" COLOR_RESET);
     printf("  - bilety.txt       - sprzedane bilety\n");
