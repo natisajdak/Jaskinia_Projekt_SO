@@ -264,7 +264,7 @@ int main() {
     zapisz_log_symulacji("=== RAPORT STRAŻNIKA ===");
     zapisz_log_symulacji("Bilety: %d (T1: %d, T2: %d), W kolejkach: %d, Aktywni: %d", 
                          stan->bilety_sprzedane, stan->bilety_trasa1, stan->bilety_trasa2, 
-                         w_kolejkach);
+                         w_kolejkach, stan->liczba_aktywnych);
 
     log_success("[STRAŻNIK] Koniec pracy");
     odlacz_pamiec_dzielona(stan);

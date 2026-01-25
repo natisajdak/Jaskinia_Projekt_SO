@@ -20,7 +20,7 @@ StanJaskini *stan_global = NULL;
 volatile sig_atomic_t zamkniecie = 0;
 
 // Lista PID procesów potomnych
-#define MAX_PIDS 200
+#define MAX_PIDS 1000
 pid_t pids[MAX_PIDS];
 int liczba_procesow = 0;
 
@@ -48,6 +48,10 @@ void cleanup(void) {
     
     if (msgid_global >= 0) {
         usun_kolejke(msgid_global);
+    }
+
+    if (semid_global != -1){
+         sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
     }
     
     log_success("Zasoby zwolnione");
@@ -427,8 +431,8 @@ int main(int argc, char *argv[]) {
     
     printf(COLOR_BOLD "PODSUMOWANIE:\n" COLOR_RESET);
     printf("─────────────────────────────────────────────\n");
-    printf("Wygenerowano:         %d zwiedzających\n", stan_global->licznik_wygenerowanych);
-    printf("Zakończono poprawnie: %d \n", stan_global->licznik_zakonczonych);
+    printf(COLOR_GREEN "Wygenerowano:         %d zwiedzających\n" COLOR_RESET, stan_global->licznik_wygenerowanych);
+    printf(COLOR_GREEN "Zakończono poprawnie: %d \n" COLOR_RESET, stan_global->licznik_zakonczonych);
     printf("Sprzedane bilety:     %d\n", stan_global->bilety_sprzedane);
     printf("  ├─ Trasa 1:         %d\n", stan_global->bilety_trasa1);
     printf("  ├─ Trasa 2:         %d\n", stan_global->bilety_trasa2);

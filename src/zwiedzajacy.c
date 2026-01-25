@@ -98,7 +98,6 @@ void* funkcja_watku_dziecka(void* arg) {
 
 int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     MsgBilet prosba;
-    
     prosba.mtype = zw->czy_powrot ? MSG_BILET_POWROT : MSG_BILET_ZWYKLY;
     prosba.zwiedzajacy_pid = moj_pid;
     prosba.wiek = zw->wiek;
@@ -122,18 +121,39 @@ int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     log_info("[ZWIEDZAJĄCY %d] Czekam na wolny slot w kolejce komunikatów...", 
              moj_pid);
     
-    if (sem_timed_wait_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS, 10) != 0) {
+    if (sem_timed_wait_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS, 60) != 0) {
         log_error("[ZWIEDZAJĄCY %d] Timeout oczekiwania na slot w kolejce!", moj_pid);
+        return 0;
+    }
+
+    // Sprawdź czy jaskinia nadal otwarta
+    if (flaga_stop_ipc || !stan_global->jaskinia_otwarta) {
+        log_warning("[ZWIEDZAJĄCY %d] Jaskinia zamknięta przed wysłaniem prośby", moj_pid);
+        sem_signal_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS);
         return 0;
     }
     
     log_info("[ZWIEDZAJĄCY %d] Mam slot - wysyłam prośbę", moj_pid);
     
     // ═══ BLOKUJĄCY msgsnd ═══
-    if (msgsnd(msgid, &prosba, sizeof(MsgBilet) - sizeof(long), 0) < 0) {
-        perror("[ZWIEDZAJĄCY] msgsnd");
-        sem_signal_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS);  // Zwolnij slot
-        return 0;
+    while (1) {
+        // Flaga 0: czekaj, aż będzie miejsce (blokuj)
+        if (msgsnd(msgid, &prosba, sizeof(MsgBilet) - sizeof(long), 0) == 0) {
+            break; // Sukces!
+        }
+
+        // Jeśli dotarliśmy tutaj, msgsnd zwrócił -1 (błąd)
+        if (errno == EINTR) {
+            log_warning("[ZWIEDZAJĄCY %d] msgsnd przerwany sygnałem - ponawiam próbę...", moj_pid);
+            continue; // Wracamy na początek pętli i próbujemy wysłać ponownie
+        } 
+        
+        // Obsługa innych błędów krytycznych (np. EIDRM - kolejka usunięta, EINVAL)
+        perror("[ZWIEDZAJĄCY] Błąd krytyczny msgsnd");
+        
+        sem_signal_safe(semid_global, SEM_KOLEJKA_MSG_SLOTS);
+        
+        return 0; 
     }
     
     log_info("[ZWIEDZAJĄCY %d] Prośba wysłana - czekam na odpowiedź kasjera...", moj_pid);
@@ -142,7 +162,7 @@ int kup_bilet(Zwiedzajacy *zw, int msgid, pid_t moj_pid) {
     MsgBilet odpowiedz;
     ssize_t ret = msgrcv(msgid, &odpowiedz, sizeof(MsgBilet) - sizeof(long),
                          moj_pid, 0);  // BLOKUJE
-    
+
     if (ret < 0) {
         if (errno == EINTR) {
             log_warning("[ZWIEDZAJĄCY %d] Przerwano oczekiwanie (sygnał)", moj_pid);
@@ -198,6 +218,7 @@ int wejscie_na_kladke(int trasa, pid_t pid, int jest_opiekunem) {
     if (ret != 0) {
 
         if (!stan_global->jaskinia_otwarta || flaga_stop_ipc) {
+            for (int i = 0; i < liczba_miejsc; i++) sem_signal_safe(semid_global, sem_limit_trasy);
         return -1; 
         }
 
@@ -212,6 +233,9 @@ int wejscie_na_kladke(int trasa, pid_t pid, int jest_opiekunem) {
 
     if (!stan_global->jaskinia_otwarta || flaga_stop_ipc) {
         log_warning("[ZWIEDZAJĄCY %d] Jaskinia zamknięta - opuszczam kolejkę i wychodzę", pid);
+        for (int i = 0; i < liczba_miejsc; i++) {
+            sem_signal_safe(semid_global, sem_limit_trasy);
+        }
         return -1;
     }
 
@@ -222,7 +246,7 @@ int wejscie_na_kladke(int trasa, pid_t pid, int jest_opiekunem) {
 
     op.sem_num = sem_kladka;
     op.sem_op  = -liczba_miejsc;
-    op.sem_flg = 0;
+    op.sem_flg = SEM_UNDO;
 
     semop(semid_global, &op, 1);
     
@@ -314,7 +338,7 @@ void wyjscie_z_kladki(int trasa, pid_t pid, int jest_opiekunem) {
 
     op.sem_num = sem_kladka;
     op.sem_op  = -liczba_miejsc;
-    op.sem_flg = 0;
+    op.sem_flg = SEM_UNDO;
 
     semop(semid_global, &op, 1);
     
@@ -445,7 +469,6 @@ int main(int argc, char *argv[]) {
     sem_signal_safe(semid_global, SEM_MUTEX);
     sem_signal_safe(semid_global, SEM_ZAKONCZENI);
     odlacz_pamiec_dzielona(stan);
-    sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
     _exit(1);
     }
 
@@ -663,7 +686,6 @@ wyjscie:
     wyrejestruj_zwiedzajacego(stan, moj_pid, semid_global);
     odlacz_pamiec_dzielona(stan);
     sem_signal_safe(semid_global, SEM_ZAKONCZENI);
-    sem_signal_safe(semid_global, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
 
     return 0;
 }

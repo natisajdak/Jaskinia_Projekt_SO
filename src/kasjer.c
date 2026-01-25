@@ -123,18 +123,12 @@ int main(int argc, char *argv[]) {
     
     log_success("[KASJER] Połączono z IPC");
     
-    // POPRAWKA 7: JEDNOWĄTKOWY kasjer (usunięto pthread)
     int bilety_lokalne = 0;
     
     log_info("[KASJER] Czekam na klientów...");
-    
+ 
     signal(SIGTERM, obsluga_sigterm);
     while (stan->jaskinia_otwarta && !flaga_zamkniecie) {
-        int w_kolejce = sprawdz_miejsce_w_kolejce(msgid);
-        if (w_kolejce >= MAX_MSG_QUEUE - 5) {
-            log_info("[KASJER] Kolejka prawie pełna (%d/%d) - czekam w_kolejce", w_kolejce, MAX_MSG_QUEUE);
-            sleep(1);
-        } 
 
         MsgBilet prosba;
         
@@ -154,7 +148,7 @@ int main(int argc, char *argv[]) {
         }
 
         sem_signal_safe(semid, SEM_KOLEJKA_MSG_SLOTS);
-        
+
         // === OBSŁUGA PROŚBY ===
         if (prosba.jest_opiekunem) {
             log_info("[KASJER] Obsługuję opiekuna PID %d (wiek: %d, dziecko: %d lat, trasa: %d, powtórka: %s)",

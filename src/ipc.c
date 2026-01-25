@@ -174,7 +174,7 @@ void inicjalizuj_semafory(int semid) {
     semctl(semid, SEM_ZAKONCZENI, SETVAL, arg);
 
     semctl(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH, SETVAL, MAX_ZWIEDZAJACYCH_TABLICA);
-    
+
     log_success("Wszystkie semafory zainicjalizowane (%d semaforów)", NUM_SEMS);
 }
 
@@ -301,15 +301,6 @@ void usun_kolejke(int msgid) {
     }
 }
 
-// Sprawdzenie liczby komunikatów w kolejce
-int sprawdz_miejsce_w_kolejce(int msgid) {
-    struct msqid_ds buf;
-    if (msgctl(msgid, IPC_STAT, &buf) < 0) {
-        perror("msgctl IPC_STAT");
-        return -1;
-    }
-    return (int)buf.msg_qnum;  // Liczba komunikatów w kolejce
-}
 
 // === REJESTRACJA ZWIEDZAJĄCYCH ===
 int zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid, int czy_opiekun) {
@@ -330,6 +321,9 @@ int zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid, int czy_o
 
     if (znaleziony_indeks == -1) {
         log_error("Brak wolnych slotów dla zwiedzającego w pamięci dzielonej!");
+        sem_signal_safe(semid, SEM_MUTEX);
+        sem_signal_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+        return -1;
     }
     
     sem_signal_safe(semid, SEM_MUTEX);
@@ -337,7 +331,11 @@ int zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid, int czy_o
 }
 
 void wyrejestruj_zwiedzajacego(StanJaskini *stan, int indeks, int semid) {
-    if (indeks < 0 || indeks >= MAX_ZWIEDZAJACYCH_TABLICA) return;
+    if (indeks < 0 || indeks >= MAX_ZWIEDZAJACYCH_TABLICA) {
+        sem_signal_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+        return;  
+    }
+    
 
     sem_wait_safe(semid, SEM_MUTEX);
     
@@ -468,12 +466,6 @@ void wypisz_stan_jaskini(StanJaskini *stan) {
     printf(COLOR_BOLD "╠═══════════════════════════════════════╣\n" COLOR_CYAN);
     printf("║ Trasa 1: %2d/%2d osób                   ║\n", stan->trasa1_licznik, N1);
     printf("║ Trasa 2: %2d/%2d osób                   ║\n", stan->trasa2_licznik, N2);
-    printf("║ Kładka 1: %2d/%2d (kier: %s)       ║\n", 
-           stan->kladka1_licznik, K, 
-           stan->kladka1_kierunek == 0 ? "WEJŚCIE" : "WYJŚCIE");
-    printf("║ Kładka 2: %2d/%2d (kier: %s)       ║\n",
-           stan->kladka2_licznik, K,
-           stan->kladka2_kierunek == 0 ? "WEJŚCIE" : "WYJŚCIE");
     printf("╠═══════════════════════════════════════╣\n");
     printf("║ Bilety sprzedane: %3d                 ║\n", stan->bilety_sprzedane);
     printf("║   - Trasa 1: %3d                      ║\n", stan->bilety_trasa1);

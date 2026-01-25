@@ -10,7 +10,7 @@
 #include "config.h"
 
 // Maksymalna tablica 
-#define MAX_ZWIEDZAJACYCH_TABLICA 2000
+#define MAX_ZWIEDZAJACYCH_TABLICA 1000
 
 // === PAMIĘĆ DZIELONA ===
 typedef struct {
@@ -147,7 +147,6 @@ void ustaw_semafor_na_zero(int semid, int sem);
 // Kolejka komunikatów
 int utworz_kolejke(void);
 void usun_kolejke(int msgid);
-int sprawdz_miejsce_w_kolejce(int msgid);
 
 int zarejestruj_zwiedzajacego(StanJaskini *stan, pid_t pid, int semid, int czy_opiekun);
 void wyrejestruj_zwiedzajacego(StanJaskini *stan, int indeks, int semid);

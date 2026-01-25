@@ -113,7 +113,7 @@ void czekaj_na_pusta_kladke(int trasa) {
             return;
         }
         
-        // Nie przerywaj przy zamknięciu - kładka musi być pusta!
+        // Nie przerywaj przy zamknięciu - kładka musi być pusta
         if (flaga_zamkniecie && elapsed % 10 == 0) {
             log_warning("[PRZEWODNIK %d] Zamknięcie aktywne - czekam aż kładka się opróżni (%d/120s, na kładce: %d)", 
                         trasa, elapsed, licznik);
