@@ -9,36 +9,35 @@
 #include <sys/shm.h>
 #include <sys/sem.h>
 #include <sys/wait.h>
+#include <errno.h>
+#include <pthread.h>
 #include "../include/config.h"
 #include "../include/ipc.h"
 #include "../include/utils.h"
 
 volatile sig_atomic_t zatrzymaj = 0;
-
+volatile sig_atomic_t koniec_generowania = 0;
+volatile int zakonczone_procesy = 0;
+int wygenerowane_procesy = 0;
 void obsluga_sigterm(int sig) {
     (void)sig;
     zatrzymaj = 1;
-}
-
-void obsluga_sigchld(int sig) {
-    (void)sig;
-    int saved_errno = errno;
-    
-    while (waitpid(-1, NULL, WNOHANG) > 0) {
-    }
-    
-    errno = saved_errno;
 }
 
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     
-    struct sigaction sa_chld;
-    sa_chld.sa_handler = obsluga_sigchld;  
-    sigemptyset(&sa_chld.sa_mask);
-    sa_chld.sa_flags = SA_RESTART | SA_NOCLDSTOP; 
-    sigaction(SIGCHLD, &sa_chld, NULL);
+    struct sigaction sa;
+    sa.sa_handler = SIG_DFL;
+    sa.sa_flags = SA_NOCLDWAIT;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
+
+    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+    perror("sigaction SIGCHLD");
+    exit(1);
+    }
 
     pid_t moj_pid = getpid();
     srand(time(NULL) ^ moj_pid);
@@ -59,6 +58,7 @@ int main(int argc, char *argv[]) {
              CZAS_OTWARCIA_SEK);
     log_info("[GENERATOR] Częstotliwość: co %d-%d sekund", 
              GENERATOR_MIN_DELAY, GENERATOR_MAX_DELAY);
+ 
     
     time_t start = time(NULL);
     int licznik_lokalny = 0;
@@ -82,7 +82,7 @@ int main(int argc, char *argv[]) {
         }
         
         if (zatrzymaj || !stan->jaskinia_otwarta) break;
-        sem_wait_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+        
         // FORK
         pid_t pid_zwiedzajacy = fork();
 
@@ -106,9 +106,9 @@ int main(int argc, char *argv[]) {
             execl("./bin/zwiedzajacy", "zwiedzajacy", NULL);
             perror("execl zwiedzajacy");
             _exit(1);
-        } else {
+        } else if (pid_zwiedzajacy > 0){
             licznik_lokalny++;
-
+            wygenerowane_procesy++;
             sem_wait_safe(semid, SEM_MUTEX);
             stan->licznik_wygenerowanych++;
             int total = stan->licznik_wygenerowanych;
@@ -124,39 +124,9 @@ int main(int argc, char *argv[]) {
 
     }
     
-    log_info("[GENERATOR] Kończę generowanie - zbieram pozostałe procesy...");
-        
-        int zebrano = 0;
-        int timeout = 10; 
-        time_t cleanup_start = time(NULL);
-        
-        while (difftime(time(NULL), cleanup_start) < timeout) {
-            pid_t pid = waitpid(-1, NULL, WNOHANG);
-            if (pid > 0) {
-                zebrano++;
-            } else if (pid == 0) {
-                usleep(100000);  
-            } else {
-                break;
-            }
-        }
-        
-        if (zebrano > 0) {
-            log_info("[GENERATOR] Zebrano %d procesów zombie podczas cleanup", zebrano);
-        }
-    
-    log_info("[GENERATOR] Kończę generowanie - czekam na wszystkie dzieci...");
-
-    log_info("[GENERATOR] Oczekiwanie na zakończenie %d procesów zwiedzających...", licznik_lokalny);
-    
-    for (int i = 0; i < licznik_lokalny; i++) {
-        sem_wait_safe(semid, SEM_ZAKONCZENI); 
-    }
-
-    while (wait(NULL) > 0); 
-
     log_success("[GENERATOR] Wszystkie procesy zakończone pomyślnie.");
     
+
     // PODSUMOWANIE
     sem_wait_safe(semid, SEM_MUTEX);
     int total_wygenerowanych = stan->licznik_wygenerowanych;
@@ -168,8 +138,7 @@ int main(int argc, char *argv[]) {
     printf("║      PODSUMOWANIE GENERATORA          ║\n");
     printf("╚═══════════════════════════════════════╝\n");
     printf(COLOR_RESET);
-    printf(COLOR_GREEN "Wygenerowano zwiedzających: %d" COLOR_RESET "\n", total_wygenerowanych);
-    printf(COLOR_GREEN "Zakończono poprawnie:       %d" COLOR_RESET "\n", stan->licznik_zakonczonych);
+    printf("Łącznie wygenerowano:      %d zwiedzających\n", total_wygenerowanych);
     printf("Czas działania:             %d sekund\n", (int)difftime(time(NULL), start));
     if (total_wygenerowanych > 0) {
         printf("Średnia częstotliwość:      %.1f sek/osoba\n", 
