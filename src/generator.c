@@ -82,11 +82,19 @@ int main(int argc, char *argv[]) {
         }
         
         if (zatrzymaj || !stan->jaskinia_otwarta) break;
+
+        sem_wait_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+
+        if (zatrzymaj || !stan->jaskinia_otwarta) {
+            sem_signal_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
+            break;
+        }
         
         // FORK
         pid_t pid_zwiedzajacy = fork();
 
         if (pid_zwiedzajacy < 0) {
+            sem_signal_safe(semid, SEM_WOLNE_SLOTY_ZWIEDZAJACYCH);
             perror("fork zwiedzajacy"); 
             blad_fork_count++;
 
