@@ -245,6 +245,22 @@ int main(int argc, char *argv[]) {
     sem_signal_safe(semid, SEM_MUTEX);
     printf("\n");
     
+
+    FILE *f = fopen(LOG_BILETY, "a"); 
+    if (f) {
+        fprintf(f, "\n=== PODSUMOWANIE KOŃCOWE KASJERA ===\n");
+        fprintf(f, "Bilety sprzedane:           %d\n", stan->bilety_sprzedane);
+        fprintf(f, "  - Trasa 1:                %d\n", stan->bilety_trasa1);
+        fprintf(f, "  - Trasa 2:                %d\n", stan->bilety_trasa2);
+        fprintf(f, "  - Powtórki (omijały):     %d\n", stan->bilety_powrot);
+        fprintf(f, "Odmowy:               %d\n", stan->licznik_odrzuconych);
+        fprintf(f, "====================================\n");
+        fclose(f);
+        log_success("[KASJER] Zapisano podsumowanie do pliku logs/bilety.txt");
+    } else {
+        log_error("[KASJER] Nie udało się otworzyć pliku bilety.txt do zapisu!");
+    }
+
     odlacz_pamiec_dzielona(stan);
     
     return 0;

@@ -32,7 +32,7 @@
 
 // Przyspieszenie symulacji
 // 240 = 4 minuty rzeczywiste = 1 sekunda symulacji (8h = 2 minuty)
-#define PRZYSPIESZENIE 480
+#define PRZYSPIESZENIE 240
 #define CZAS_OTWARCIA_SEK ((TK - TP) * 3600 / PRZYSPIESZENIE)  // Ile sekund symulacji trwa dzień pracy              
 
 // === PARAMETRY SYMULACJI ===

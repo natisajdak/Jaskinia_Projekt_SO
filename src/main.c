@@ -278,12 +278,12 @@ int main(int argc, char *argv[]) {
     printf("║      PARAMETRY CZASU SYMULACJI              ║\n");
     printf("╠═════════════════════════════════════════════╣\n");
     printf("║ Godziny jaskini:     %02d:00 - %02d:00          ║\n", TP, TK);
-    printf("║ Czas rzeczywisty:    %d godzin              ║\n", TK - TP);
+    printf("║ Czas rzeczywisty:    %d godzin               ║\n", TK - TP);
     printf("║ Przyspieszenie:      %dx                   ║\n", PRZYSPIESZENIE);
     printf("║ Czas symulacji:      %d sek (~%.1f min)      ║\n",
            CZAS_OTWARCIA_SEK, CZAS_OTWARCIA_SEK / 60.0);
     printf("╠═════════════════════════════════════════════╣\n");
-    printf("║ 1 sekunda symulacji = %.1f min rzeczywistych║\n",
+    printf("║ 1 sekunda symulacji = %.1f min rzeczywistych ║\n",
            PRZYSPIESZENIE / 60.0);
     printf("╚═════════════════════════════════════════════╝\n");
     printf(COLOR_RESET "\n");
